@@ -2,6 +2,7 @@ package com.lecture.spring_sns_sample_project.domain.user;
 
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,7 +16,11 @@ public class UserService {
     if (userRepository.existsByEmail(user.getEmail())) {
       throw UserException.emailAlreadyExists(user.getEmail());
     }
-    return userRepository.save(user);
+    try {
+      return userRepository.save(user);
+    } catch (DataIntegrityViolationException e) {
+      throw UserException.emailAlreadyExists(user.getEmail());
+    }
   }
 
   public User getById(Long id) {
