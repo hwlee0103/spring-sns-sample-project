@@ -4,7 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Spring Boot SNS (Social Networking Service) sample project — a REST API built with Spring Boot 4.0.5 and Java 26.
+Spring Boot SNS (Social Networking Service) sample project. Monorepo:
+- **Backend** (`/`): REST API — Spring Boot 4.0.5 + Java 26
+- **Frontend** (`frontend/`): Next.js 15+ App Router + React 19 + TypeScript (Threads/Instagram/Twitter 스타일 UI)
+
+## Code Rules
+
+- **Backend rules**: `.claude/skills/spring-api-rules/SKILL.md` — REST API, 도메인 패키징, 검증, 페이징, 공통 예외
+- **Frontend rules**: `.claude/skills/nextjs-frontend-rules/SKILL.md` — Next.js App Router, 컴포넌트, TanStack Query, Tailwind, shadcn/ui, 폼 검증
+- **Code review**: `.claude/agents/code-reviewer.md` — 위 두 SKILL.md 를 자동 참조
+
+## Design Documents
+
+- **Backend design**: `docs/backend-design.md` — 패키지 구조, 도메인 모델, API 계약, 인증, 검증 전략
+- **Frontend design**: `docs/frontend-design.md` — 디렉토리, 데이터 흐름, rewrites 전략, Next.js 16 변경점
 
 ## Build & Test Commands
 
