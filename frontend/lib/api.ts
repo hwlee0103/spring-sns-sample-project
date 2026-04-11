@@ -101,11 +101,20 @@ function buildUrl(path: string, query?: Query): string {
 }
 
 async function parseError(response: Response): Promise<ApiError> {
+  // body stream 은 단 1회만 읽을 수 있으므로 clone 후 json 시도, 실패 시 text 로 fallback 하여
+  // stream 을 확실히 소진한다 (반쯤 소비된 채 남으면 connection pool 에 영향).
+  const cloned = response.clone();
   let raw: unknown;
   try {
     raw = await response.json();
   } catch {
-    return new ApiError(`HTTP ${response.status}`, response.status);
+    let text = "";
+    try {
+      text = await cloned.text();
+    } catch {
+      // 무시 — 어차피 stream 은 종료됨
+    }
+    return new ApiError(text || `HTTP ${response.status}`, response.status);
   }
 
   // 검증 실패 응답 우선 매칭
@@ -126,6 +135,18 @@ async function parseError(response: Response): Promise<ApiError> {
   return new ApiError(`HTTP ${response.status}`, response.status);
 }
 
+/**
+ * 브라우저의 `XSRF-TOKEN` 쿠키 값을 읽어 `X-XSRF-TOKEN` 헤더로 동봉한다.
+ * 백엔드 Spring Security 6 `CookieCsrfTokenRepository.withHttpOnlyFalse()` 와 짝이다.
+ */
+function readCsrfToken(): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
+const CSRF_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 async function request<TSchema extends ZodType | undefined>(
   method: string,
   path: string,
@@ -139,6 +160,10 @@ async function request<TSchema extends ZodType | undefined>(
   }
   if (!headers.has("Accept")) {
     headers.set("Accept", "application/json");
+  }
+  if (CSRF_METHODS.has(method) && !headers.has("X-XSRF-TOKEN")) {
+    const token = readCsrfToken();
+    if (token) headers.set("X-XSRF-TOKEN", token);
   }
 
   let response: Response;
