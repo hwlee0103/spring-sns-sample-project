@@ -2,9 +2,14 @@ package com.lecture.spring_sns_sample_project.domain.user;
 
 import com.lecture.spring_sns_sample_project.domain.common.DomainException;
 
+/**
+ * 사용자 도메인 예외.
+ *
+ * <p>외부에서는 정적 팩토리 메서드만 사용해야 한다 — 메시지 포맷을 단일 진입점에 모아 일관성을 보장한다.
+ */
 public class UserException extends DomainException {
 
-  public UserException(String message) {
+  private UserException(String message) {
     super(message);
   }
 
