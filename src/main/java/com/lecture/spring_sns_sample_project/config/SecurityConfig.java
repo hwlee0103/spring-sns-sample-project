@@ -1,5 +1,6 @@
 package com.lecture.spring_sns_sample_project.config;
 
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -9,6 +10,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.session.ChangeSessionIdAuthenticationStrategy;
 import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
@@ -44,7 +46,7 @@ public class SecurityConfig {
                     // 공개 엔드포인트
                     .requestMatchers(HttpMethod.POST, "/api/user")
                     .permitAll() // 회원가입
-                    .requestMatchers("/api/auth/login", "/api/auth/me")
+                    .requestMatchers("/api/auth/login")
                     .permitAll()
                     .requestMatchers(HttpMethod.GET, "/api/post", "/api/post/*")
                     .permitAll() // 비로그인 피드 열람 허용
@@ -52,9 +54,13 @@ public class SecurityConfig {
                     .permitAll() // 사용자 프로필 열람
                     .requestMatchers("/h2-console/**")
                     .permitAll()
-                    // 그 외 모두 인증 필요
+                    // 그 외 모두 인증 필요 (/api/auth/me 포함 — 비로그인은 401 반환)
                     .anyRequest()
                     .authenticated())
+        .exceptionHandling(
+            ex ->
+                // 인증 실패 시 SPA 에 적합한 401 반환 (기본 403/302 대신)
+                ex.authenticationEntryPoint(unauthorizedEntryPoint()))
         .formLogin(AbstractHttpConfigurer::disable)
         .httpBasic(AbstractHttpConfigurer::disable)
         .logout(
@@ -72,6 +78,12 @@ public class SecurityConfig {
   @Bean
   public SecurityContextRepository securityContextRepository() {
     return new HttpSessionSecurityContextRepository();
+  }
+
+  /** 인증 실패 시 401 만 반환 (Body 비움) — SPA 가 fetchCurrentUser null fallback 으로 처리. */
+  private static AuthenticationEntryPoint unauthorizedEntryPoint() {
+    return (request, response, authException) ->
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
   }
 
   /**
