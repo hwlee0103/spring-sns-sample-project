@@ -2,6 +2,7 @@ package com.lecture.spring_sns_sample_project.controller;
 
 import com.lecture.spring_sns_sample_project.controller.dto.LoginRequest;
 import com.lecture.spring_sns_sample_project.controller.dto.UserResponse;
+import com.lecture.spring_sns_sample_project.domain.user.AuthUser;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -13,8 +14,10 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -27,6 +30,7 @@ public class AuthController {
 
   private final AuthenticationManager authenticationManager;
   private final SecurityContextRepository securityContextRepository;
+  private final SessionAuthenticationStrategy sessionAuthenticationStrategy;
   private final UserService userService;
 
   @PostMapping("/api/auth/login")
@@ -39,6 +43,10 @@ public class AuthController {
           authenticationManager.authenticate(
               new UsernamePasswordAuthenticationToken(request.email(), request.password()));
 
+      // (1) 세션 고정 공격 방어 — 로그인 성공 시 세션 ID 를 새로 발급
+      sessionAuthenticationStrategy.onAuthentication(authentication, httpRequest, httpResponse);
+
+      // (2) SecurityContext 저장
       SecurityContext context = SecurityContextHolder.createEmptyContext();
       context.setAuthentication(authentication);
       SecurityContextHolder.setContext(context);
@@ -52,13 +60,11 @@ public class AuthController {
   }
 
   @GetMapping("/api/auth/me")
-  public ResponseEntity<UserResponse> me(Authentication authentication) {
-    if (authentication == null
-        || !authentication.isAuthenticated()
-        || "anonymousUser".equals(authentication.getPrincipal())) {
+  public ResponseEntity<UserResponse> me(@AuthenticationPrincipal AuthUser authUser) {
+    if (authUser == null) {
       return ResponseEntity.status(401).build();
     }
-    User user = userService.getByEmail(authentication.getName());
+    User user = userService.getById(authUser.getId());
     return ResponseEntity.ok(UserResponse.from(user));
   }
 }

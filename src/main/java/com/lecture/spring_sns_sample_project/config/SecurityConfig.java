@@ -10,8 +10,13 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.session.ChangeSessionIdAuthenticationStrategy;
+import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
+import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 
 @Configuration
 @EnableWebSecurity
@@ -19,7 +24,18 @@ public class SecurityConfig {
 
   @Bean
   public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-    http.csrf(AbstractHttpConfigurer::disable) // 쿠키 세션 + CORS 환경, 학습 프로젝트 단순화
+    // CSRF: 쿠키 기반 (XSRF-TOKEN), JS 가 읽을 수 있도록 HttpOnly 비활성
+    CookieCsrfTokenRepository csrfTokenRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
+    CsrfTokenRequestAttributeHandler csrfRequestHandler = new CsrfTokenRequestAttributeHandler();
+
+    http.csrf(
+            csrf ->
+                csrf.csrfTokenRepository(csrfTokenRepository)
+                    .csrfTokenRequestHandler(csrfRequestHandler)
+                    // H2 콘솔은 dev 편의를 위해 CSRF 면제
+                    .ignoringRequestMatchers("/h2-console/**"))
+        // 모든 응답에서 CSRF 쿠키를 강제 materialize
+        .addFilterAfter(new CsrfCookieFilter(), BasicAuthenticationFilter.class)
         .sessionManagement(
             session -> session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
         .authorizeHttpRequests(
@@ -47,7 +63,7 @@ public class SecurityConfig {
                     .logoutUrl("/api/auth/logout")
                     .logoutSuccessHandler((req, res, authentication) -> res.setStatus(204)));
 
-    // H2 콘솔 iframe 허용
+    // H2 콘솔 iframe 허용 (dev only — 운영 배포 시 profile 분리 필요)
     http.headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()));
 
     return http.build();
@@ -56,6 +72,15 @@ public class SecurityConfig {
   @Bean
   public SecurityContextRepository securityContextRepository() {
     return new HttpSessionSecurityContextRepository();
+  }
+
+  /**
+   * 로그인 성공 시 세션 ID 를 새로 발급하여 세션 고정 공격(Session Fixation)을 방어한다. {@code AuthController} 가 수동
+   * authenticate 경로를 사용하므로 이 빈을 직접 호출해야 한다.
+   */
+  @Bean
+  public SessionAuthenticationStrategy sessionAuthenticationStrategy() {
+    return new ChangeSessionIdAuthenticationStrategy();
   }
 
   @Bean
