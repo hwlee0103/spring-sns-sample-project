@@ -1,7 +1,7 @@
 package com.lecture.spring_sns_sample_project.domain.post;
 
 import com.lecture.spring_sns_sample_project.domain.user.User;
-import com.lecture.spring_sns_sample_project.domain.user.UserService;
+import com.lecture.spring_sns_sample_project.domain.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -13,16 +13,17 @@ import org.springframework.transaction.annotation.Transactional;
 public class PostService {
 
   private final PostRepository postRepository;
-  private final UserService userService;
+  private final UserRepository userRepository;
 
-  public Post create(String authorEmail, String content) {
-    User author = userService.getByEmail(authorEmail);
-    Post post = new Post(author, content);
+  public Post create(Long authorId, String content) {
+    // FK 만 채우면 되므로 SELECT 없이 reference proxy 사용 → mutation 당 1 DB 왕복 절감
+    User authorRef = userRepository.getReferenceById(authorId);
+    Post post = new Post(authorRef, content);
     return postRepository.save(post);
   }
 
   public Page<Post> getFeed(Pageable pageable) {
-    return postRepository.findAllByOrderByIdDesc(pageable);
+    return postRepository.findAll(pageable);
   }
 
   public Post getById(Long id) {
@@ -30,20 +31,19 @@ public class PostService {
   }
 
   @Transactional
-  public Post update(String requesterEmail, Long id, String content) {
+  public Post update(Long requesterId, Long id, String content) {
     Post post = getById(id);
-    User requester = userService.getByEmail(requesterEmail);
-    if (!post.isAuthor(requester.getId())) {
+    if (!post.isAuthor(requesterId)) {
       throw PostException.forbidden(id);
     }
     post.updateContent(content);
     return post;
   }
 
-  public void delete(String requesterEmail, Long id) {
+  @Transactional
+  public void delete(Long requesterId, Long id) {
     Post post = getById(id);
-    User requester = userService.getByEmail(requesterEmail);
-    if (!post.isAuthor(requester.getId())) {
+    if (!post.isAuthor(requesterId)) {
       throw PostException.forbidden(id);
     }
     postRepository.delete(post);
