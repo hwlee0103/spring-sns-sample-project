@@ -31,6 +31,12 @@ public class UserService {
     return userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
   }
 
+  public User getByEmail(String email) {
+    return userRepository
+        .findByEmail(email)
+        .orElseThrow(() -> UserException.notFoundByEmail(email));
+  }
+
   public Page<User> getAll(Pageable pageable) {
     return userRepository.findAll(pageable);
   }
