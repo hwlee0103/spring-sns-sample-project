@@ -1,8 +1,10 @@
 package com.lecture.spring_sns_sample_project.config;
 
 import jakarta.servlet.http.HttpServletResponse;
+import java.util.Arrays;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
@@ -25,7 +27,8 @@ import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 public class SecurityConfig {
 
   @Bean
-  public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+  public SecurityFilterChain securityFilterChain(HttpSecurity http, Environment env)
+      throws Exception {
     // CSRF: 쿠키 기반 (XSRF-TOKEN), JS 가 읽을 수 있도록 HttpOnly 비활성
     CookieCsrfTokenRepository csrfTokenRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
     CsrfTokenRequestAttributeHandler csrfRequestHandler = new CsrfTokenRequestAttributeHandler();
@@ -69,8 +72,18 @@ public class SecurityConfig {
                     .logoutUrl("/api/auth/logout")
                     .logoutSuccessHandler((req, res, authentication) -> res.setStatus(204)));
 
-    // H2 콘솔 iframe 허용 (dev only — 운영 배포 시 profile 분리 필요)
-    http.headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()));
+    // H2 콘솔 iframe 허용은 dev 프로필에서만. 운영 환경은 deny 로 clickjacking 방어.
+    boolean devProfile = Arrays.asList(env.getActiveProfiles()).contains("dev");
+    http.headers(
+        headers ->
+            headers.frameOptions(
+                frame -> {
+                  if (devProfile) {
+                    frame.sameOrigin();
+                  } else {
+                    frame.deny();
+                  }
+                }));
 
     return http.build();
   }
