@@ -1,13 +1,17 @@
 package com.lecture.spring_sns_sample_project.controller;
 
+import com.lecture.spring_sns_sample_project.controller.dto.PageResponse;
 import com.lecture.spring_sns_sample_project.controller.dto.UserCreateRequest;
 import com.lecture.spring_sns_sample_project.controller.dto.UserResponse;
 import com.lecture.spring_sns_sample_project.controller.dto.UserUpdateRequest;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserService;
+import jakarta.validation.Valid;
 import java.net.URI;
-import java.util.List;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,7 +28,7 @@ public class UserController {
   private final UserService userService;
 
   @PostMapping("/api/user")
-  public ResponseEntity<UserResponse> register(@RequestBody UserCreateRequest request) {
+  public ResponseEntity<UserResponse> register(@Valid @RequestBody UserCreateRequest request) {
     User user = userService.register(request.toEntity());
     UserResponse response = UserResponse.from(user);
     return ResponseEntity.created(URI.create("/api/user/" + user.getId())).body(response);
@@ -37,14 +41,16 @@ public class UserController {
   }
 
   @GetMapping("/api/user")
-  public ResponseEntity<List<UserResponse>> getUsers() {
-    List<UserResponse> responses = userService.getAll().stream().map(UserResponse::from).toList();
-    return ResponseEntity.ok(responses);
+  public ResponseEntity<PageResponse<UserResponse>> getUsers(
+      @PageableDefault(size = 20, sort = "id", direction = Sort.Direction.DESC) Pageable pageable) {
+    PageResponse<UserResponse> response =
+        PageResponse.from(userService.getAll(pageable), UserResponse::from);
+    return ResponseEntity.ok(response);
   }
 
   @PutMapping("/api/user/{id}")
   public ResponseEntity<UserResponse> updateUser(
-      @PathVariable Long id, @RequestBody UserUpdateRequest request) {
+      @PathVariable Long id, @Valid @RequestBody UserUpdateRequest request) {
     User user = userService.update(id, request.nickname(), request.password());
     return ResponseEntity.ok(UserResponse.from(user));
   }

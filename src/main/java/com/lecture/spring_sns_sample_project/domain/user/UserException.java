@@ -1,6 +1,8 @@
 package com.lecture.spring_sns_sample_project.domain.user;
 
-public class UserException extends RuntimeException {
+import com.lecture.spring_sns_sample_project.domain.common.DomainException;
+
+public class UserException extends DomainException {
 
   public UserException(String message) {
     super(message);
@@ -12,5 +14,9 @@ public class UserException extends RuntimeException {
 
   public static UserException notFound(Long id) {
     return new UserException("존재하지 않는 사용자입니다: " + id);
+  }
+
+  public static UserException invalidField(String fieldName) {
+    return new UserException(fieldName + " 값이 비어 있을 수 없습니다.");
   }
 }

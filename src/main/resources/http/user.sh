@@ -47,11 +47,17 @@ HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
 check "1. 회원가입" "POST" "$BASE_URL/api/user" "$REQ_BODY" "201" "$HTTP_CODE" "$BODY"
 
-# 2. 전체 사용자 조회
+# 2. 전체 사용자 조회 (페이징 — 기본값)
 RESPONSE=$(curl -s -w "\n%{http_code}" -X GET "$BASE_URL/api/user")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "2. 전체 사용자 조회" "GET" "$BASE_URL/api/user" "" "200" "$HTTP_CODE" "$BODY"
+check "2. 전체 사용자 조회 (기본 페이징)" "GET" "$BASE_URL/api/user" "" "200" "$HTTP_CODE" "$BODY"
+
+# 2-1. 전체 사용자 조회 (페이지/사이즈 지정)
+RESPONSE=$(curl -s -w "\n%{http_code}" -X GET "$BASE_URL/api/user?page=0&size=5&sort=id,desc")
+HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+BODY=$(echo "$RESPONSE" | sed '$d')
+check "2-1. 전체 사용자 조회 (page=0,size=5)" "GET" "$BASE_URL/api/user?page=0&size=5&sort=id,desc" "" "200" "$HTTP_CODE" "$BODY"
 
 # 3. ID로 사용자 조회
 RESPONSE=$(curl -s -w "\n%{http_code}" -X GET "$BASE_URL/api/user/1")

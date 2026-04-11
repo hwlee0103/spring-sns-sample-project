@@ -1,8 +1,10 @@
 package com.lecture.spring_sns_sample_project.domain.user;
 
-import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -11,11 +13,13 @@ import org.springframework.transaction.annotation.Transactional;
 public class UserService {
 
   private final UserRepository userRepository;
+  private final PasswordEncoder passwordEncoder;
 
   public User register(User user) {
     if (userRepository.existsByEmail(user.getEmail())) {
       throw UserException.emailAlreadyExists(user.getEmail());
     }
+    user.encodePassword(passwordEncoder);
     try {
       return userRepository.save(user);
     } catch (DataIntegrityViolationException e) {
@@ -27,14 +31,17 @@ public class UserService {
     return userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
   }
 
-  public List<User> getAll() {
-    return userRepository.findAll();
+  public Page<User> getAll(Pageable pageable) {
+    return userRepository.findAll(pageable);
   }
 
   @Transactional
   public User update(Long id, String nickname, String password) {
+    if (password == null || password.isBlank()) {
+      throw UserException.invalidField("password");
+    }
     User user = userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
-    user.update(nickname, password);
+    user.update(nickname, passwordEncoder.encode(password));
     return user;
   }
 

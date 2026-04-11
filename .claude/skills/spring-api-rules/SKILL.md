@@ -30,6 +30,19 @@ com.apiece.springboot_sns_sample
 - `@ConfigurationProperties` classes should be written as records
 - Use Lombok `@Getter` actively for entities and classes (except DTOs which use records)
 
+## Null / Blank Validation (필수)
+
+도메인/서비스 계층의 입력값은 항상 null·빈 문자열·공백 문자열 여부를 검증한다. 검증을 빼먹지 말 것.
+
+- **Entity 상태 변경 메서드**: 메서드 진입 즉시 파라미터 검증. 위반 시 도메인 예외(`{Domain}Exception.invalidField(...)` 등) 발생.
+  - String: `value == null || value.isBlank()`
+  - Collection: `value == null || value.isEmpty()`
+  - Object: `Objects.requireNonNull(value, "...")`
+- **Service 메서드**: Entity 호출 이전에 외부 의존성(예: `PasswordEncoder.encode(...)`)이 먼저 실행되는 경우, 그 의존성 호출 전에 raw 값 검증을 선행한다 (NPE 방지).
+- **Controller DTO (record)**: Bean Validation(`@NotBlank`, `@NotNull`, `@Size` 등)을 적용하고 컨트롤러 메서드 파라미터에 `@Valid` 를 붙인다.
+- 검증 실패 메시지는 어느 필드인지 식별 가능해야 한다 (단순 "invalid input" 금지).
+- 동일 검증을 여러 계층에서 중복하더라도 방어적 구현이 우선이다 (Entity 불변식 + Service 입력 검증).
+
 ## Controller
 
 - Use `@RestController`
@@ -43,6 +56,14 @@ com.apiece.springboot_sns_sample
 - Use Java `record`
 - Request: `toEntity()` method
 - Response: `from(Entity)` static factory
+- 목록 응답은 `List<T>` 가 아닌 `PageResponse<T>` 로 감싸 페이지 메타데이터를 함께 반환한다.
+
+## Pagination (필수)
+
+- 컬렉션 전체 조회 엔드포인트는 항상 `Pageable` 을 받아 페이징 처리한다 — `findAll()` 직접 노출 금지.
+- Controller: `@PageableDefault(size = N, sort = "...", direction = ...)` 로 기본값 명시.
+- Service: `Page<Entity>` 반환. Repository는 Spring Data JPA의 `findAll(Pageable)` 또는 커스텀 쿼리 메서드를 사용.
+- Response: `PageResponse.from(page, EntityResponse::from)` 으로 변환하여 `content`, `page`, `size`, `totalElements`, `totalPages`, `first`, `last` 를 포함한다.
 
 ## Domain
 
@@ -75,8 +96,10 @@ Each domain is organized under `domain/{domainName}/` package:
 
 ## Exception Handling
 
-- Domain exceptions: `domain/{domainName}/{Domain}Exception.java`
-- Global handling with `@RestControllerAdvice`
+- 모든 도메인 예외는 `domain/common/DomainException` 을 상속한다 (`abstract` 부모 클래스).
+- 도메인별 예외: `domain/{domainName}/{Domain}Exception.java` — 정적 팩토리 메서드로 의미 있는 메시지 제공.
+- 전역 처리: `@RestControllerAdvice` 에서 `DomainException` 을 단일 핸들러로 처리하여 도메인 추가 시 핸들러 변경이 필요 없도록 한다.
+- Bean Validation 실패는 `MethodArgumentNotValidException` 핸들러에서 필드별 에러로 응답한다.
 
 ## API Shell Script
 ## 테스트용 프로그램
