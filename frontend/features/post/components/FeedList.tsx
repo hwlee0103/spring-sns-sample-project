@@ -8,7 +8,10 @@ import { useFeedQuery } from "@/features/post/hooks/useFeedQuery";
 
 /**
  * 피드 무한 스크롤 리스트.
- * Intersection Observer 로 마지막 요소가 보이면 다음 페이지를 자동 로드한다.
+ *
+ * Observer 는 mount 시 1회만 등록하고, 콜백 내부에서 ref 를 통해 최신 상태를 읽는다.
+ * 이렇게 하지 않으면 `isFetchingNextPage` 토글마다 effect 가 disconnect/re-observe 되어
+ * 사용자가 빠르게 스크롤할 때 sentinel 을 놓치고 페이지 로딩이 끊긴다.
  */
 export function FeedList() {
   const { data, isPending, isError, error, fetchNextPage, hasNextPage, isFetchingNextPage } =
@@ -16,15 +19,23 @@ export function FeedList() {
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
+  // 콜백 내부에서 항상 최신 값을 읽기 위한 ref 들
+  const stateRef = useRef({ hasNextPage, isFetchingNextPage });
+  const fetchNextPageRef = useRef(fetchNextPage);
+  stateRef.current = { hasNextPage, isFetchingNextPage };
+  fetchNextPageRef.current = fetchNextPage;
+
   useEffect(() => {
     const node = sentinelRef.current;
-    if (!node || !hasNextPage) return;
+    if (!node) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
         const first = entries[0];
-        if (first?.isIntersecting && !isFetchingNextPage) {
-          void fetchNextPage();
+        if (!first?.isIntersecting) return;
+        const { hasNextPage: hasNext, isFetchingNextPage: isFetching } = stateRef.current;
+        if (hasNext && !isFetching) {
+          void fetchNextPageRef.current();
         }
       },
       { rootMargin: "200px" },
@@ -32,7 +43,8 @@ export function FeedList() {
 
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (isPending) {
     return <p className="text-muted-foreground p-4 text-sm">불러오는 중...</p>;
