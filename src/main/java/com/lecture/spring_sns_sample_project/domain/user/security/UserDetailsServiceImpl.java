@@ -1,5 +1,7 @@
-package com.lecture.spring_sns_sample_project.domain.user;
+package com.lecture.spring_sns_sample_project.domain.user.security;
 
+import com.lecture.spring_sns_sample_project.domain.user.User;
+import com.lecture.spring_sns_sample_project.domain.user.UserRepository;
 import jakarta.annotation.PostConstruct;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;

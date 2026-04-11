@@ -2,10 +2,10 @@ package com.lecture.spring_sns_sample_project.controller;
 
 import com.lecture.spring_sns_sample_project.controller.dto.LoginRequest;
 import com.lecture.spring_sns_sample_project.controller.dto.UserResponse;
-import com.lecture.spring_sns_sample_project.domain.user.AuthUser;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserException;
 import com.lecture.spring_sns_sample_project.domain.user.UserService;
+import com.lecture.spring_sns_sample_project.domain.user.security.AuthUser;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;

@@ -1,5 +1,6 @@
-package com.lecture.spring_sns_sample_project.domain.user;
+package com.lecture.spring_sns_sample_project.domain.user.security;
 
+import com.lecture.spring_sns_sample_project.domain.user.User;
 import java.util.Collection;
 import java.util.List;
 import lombok.Getter;

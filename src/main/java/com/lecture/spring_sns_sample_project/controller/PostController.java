@@ -6,7 +6,7 @@ import com.lecture.spring_sns_sample_project.controller.dto.PostResponse;
 import com.lecture.spring_sns_sample_project.controller.dto.PostUpdateRequest;
 import com.lecture.spring_sns_sample_project.domain.post.Post;
 import com.lecture.spring_sns_sample_project.domain.post.PostService;
-import com.lecture.spring_sns_sample_project.domain.user.AuthUser;
+import com.lecture.spring_sns_sample_project.domain.user.security.AuthUser;
 import jakarta.validation.Valid;
 import java.net.URI;
 import lombok.RequiredArgsConstructor;
