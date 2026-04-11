@@ -29,7 +29,7 @@ public class UserController {
 
   @PostMapping("/api/user")
   public ResponseEntity<UserResponse> register(@Valid @RequestBody UserCreateRequest request) {
-    User user = userService.register(request.toEntity());
+    User user = userService.register(request.email(), request.password(), request.nickname());
     UserResponse response = UserResponse.from(user);
     return ResponseEntity.created(URI.create("/api/user/" + user.getId())).body(response);
   }
