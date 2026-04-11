@@ -51,7 +51,7 @@ public class UserController {
   @PutMapping("/api/user/{id}")
   public ResponseEntity<UserResponse> updateUser(
       @PathVariable Long id, @Valid @RequestBody UserUpdateRequest request) {
-    User user = userService.update(id, request.nickname(), request.password());
+    User user = userService.update(id, request.toCommand());
     return ResponseEntity.ok(UserResponse.from(user));
   }
 

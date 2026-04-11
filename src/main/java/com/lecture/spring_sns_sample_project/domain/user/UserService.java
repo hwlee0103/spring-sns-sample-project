@@ -54,11 +54,11 @@ public class UserService {
   }
 
   @Transactional
-  public User update(Long id, String nickname, String rawPassword) {
-    validateNickname(nickname);
-    validateRawPassword(rawPassword);
+  public User update(Long id, UserUpdateCommand command) {
+    validateNickname(command.nickname());
+    validateRawPassword(command.rawPassword());
     User user = userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
-    user.update(nickname, passwordEncoder.encode(rawPassword));
+    user.update(command.nickname(), passwordEncoder.encode(command.rawPassword()));
     return user;
   }
 
