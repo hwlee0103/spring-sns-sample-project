@@ -20,7 +20,7 @@ import org.springframework.security.web.authentication.www.BasicAuthenticationFi
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
-import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
+import org.springframework.security.web.csrf.XorCsrfTokenRequestAttributeHandler;
 
 @Configuration
 @EnableWebSecurity
@@ -31,7 +31,9 @@ public class SecurityConfig {
       throws Exception {
     // CSRF: 쿠키 기반 (XSRF-TOKEN), JS 가 읽을 수 있도록 HttpOnly 비활성
     CookieCsrfTokenRepository csrfTokenRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
-    CsrfTokenRequestAttributeHandler csrfRequestHandler = new CsrfTokenRequestAttributeHandler();
+    // XorCsrfTokenRequestAttributeHandler: 토큰을 XOR 마스킹하여 BREACH 압축 공격 완화
+    XorCsrfTokenRequestAttributeHandler csrfRequestHandler =
+        new XorCsrfTokenRequestAttributeHandler();
 
     http.csrf(
             csrf ->
@@ -41,6 +43,8 @@ public class SecurityConfig {
                     .ignoringRequestMatchers("/h2-console/**"))
         // 모든 응답에서 CSRF 쿠키를 강제 materialize
         .addFilterAfter(csrfCookieFilter(), BasicAuthenticationFilter.class)
+        // 인증 엔드포인트 rate limiting (IP 기반, 분당 10회)
+        .addFilterBefore(rateLimitFilter(), BasicAuthenticationFilter.class)
         .sessionManagement(
             session -> session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
         .authorizeHttpRequests(
@@ -72,18 +76,31 @@ public class SecurityConfig {
                     .logoutUrl("/api/auth/logout")
                     .logoutSuccessHandler((req, res, authentication) -> res.setStatus(204)));
 
-    // H2 콘솔 iframe 허용은 dev 프로필에서만. 운영 환경은 deny 로 clickjacking 방어.
     boolean devProfile = Arrays.asList(env.getActiveProfiles()).contains("dev");
+
+    // 헤더 보안 — frameOptions + CSP
     http.headers(
-        headers ->
-            headers.frameOptions(
-                frame -> {
-                  if (devProfile) {
-                    frame.sameOrigin();
-                  } else {
-                    frame.deny();
-                  }
-                }));
+        headers -> {
+          // H2 콘솔 iframe 허용은 dev 프로필에서만. 운영 환경은 deny 로 clickjacking 방어.
+          headers.frameOptions(
+              frame -> {
+                if (devProfile) {
+                  frame.sameOrigin();
+                } else {
+                  frame.deny();
+                }
+              });
+          // Content-Security-Policy: XSS 발생 시 외부 스크립트 로드 차단으로 피해 최소화
+          headers.contentSecurityPolicy(
+              csp ->
+                  csp.policyDirectives(
+                      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:"));
+        });
+
+    // 운영 환경에서만 HTTPS 강제 — dev 는 HTTP 로 동작
+    if (!devProfile) {
+      http.requiresChannel(channel -> channel.anyRequest().requiresSecure());
+    }
 
     return http.build();
   }
@@ -91,6 +108,11 @@ public class SecurityConfig {
   @Bean
   public CsrfCookieFilter csrfCookieFilter() {
     return new CsrfCookieFilter();
+  }
+
+  @Bean
+  public RateLimitFilter rateLimitFilter() {
+    return new RateLimitFilter();
   }
 
   @Bean
