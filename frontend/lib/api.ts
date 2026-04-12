@@ -151,7 +151,7 @@ async function request<TSchema extends ZodType | undefined>(
   method: string,
   path: string,
   options: MutationOptions<NonNullable<TSchema>> = {},
-): Promise<TSchema extends ZodType<infer Out> ? Out : void> {
+): Promise<TSchema extends ZodType ? z.output<NonNullable<TSchema>> : void> {
   const { schema, query, init, body, cache, next } = options;
 
   const headers = new Headers(init?.headers);
@@ -178,6 +178,8 @@ async function request<TSchema extends ZodType | undefined>(
       next,
     });
   } catch (e) {
+    // AbortError 는 TanStack Query 의 cancel/언마운트 흐름에서 발생 — rethrow 해야 정상 취소 처리
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
     throw new ApiError(
       e instanceof Error ? e.message : "Network error",
       0,
@@ -190,7 +192,7 @@ async function request<TSchema extends ZodType | undefined>(
 
   if (response.status === 204 || !schema) {
     // schema 미지정 시 void 반환
-    return undefined as TSchema extends ZodType<infer Out> ? Out : void;
+    return undefined as TSchema extends ZodType ? z.output<NonNullable<TSchema>> : void;
   }
 
   let raw: unknown;
@@ -210,7 +212,7 @@ async function request<TSchema extends ZodType | undefined>(
     }
     throw new ApiError("응답 형식이 올바르지 않습니다.", response.status);
   }
-  return parsed.data as TSchema extends ZodType<infer Out> ? Out : void;
+  return parsed.data as TSchema extends ZodType ? z.output<NonNullable<TSchema>> : void;
 }
 
 export const api = {

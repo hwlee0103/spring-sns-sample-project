@@ -13,7 +13,8 @@ public class GlobalExceptionHandler {
 
   @ExceptionHandler(DomainException.class)
   public ResponseEntity<Map<String, String>> handleDomainException(DomainException e) {
-    return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+    return ResponseEntity.status(e.getErrorType().getStatus())
+        .body(Map.of("message", e.getMessage()));
   }
 
   @ExceptionHandler(MethodArgumentNotValidException.class)

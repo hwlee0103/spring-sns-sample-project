@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useLoginMutation } from "@/features/auth/hooks/useLoginMutation";
 import { ApiError } from "@/lib/api";
+import { applyApiErrors } from "@/lib/form-utils";
 
 const loginSchema = z.object({
   email: z.string().email("이메일 형식이 올바르지 않습니다."),
@@ -17,6 +18,8 @@ const loginSchema = z.object({
 });
 
 type LoginValues = z.infer<typeof loginSchema>;
+
+const LOGIN_FIELDS = ["email", "password"] as const;
 
 export function LoginForm() {
   const router = useRouter();
@@ -37,19 +40,12 @@ export function LoginForm() {
       router.push("/");
       router.refresh();
     } catch (e) {
-      if (e instanceof ApiError) {
-        if (e.status === 401) {
-          setError("password", { message: "이메일 또는 비밀번호가 올바르지 않습니다." });
-          return;
-        }
-        if (e.fieldErrors) {
-          for (const [field, message] of Object.entries(e.fieldErrors)) {
-            setError(field as keyof LoginValues, { message });
-          }
-          return;
-        }
-        setError("root", { message: e.message });
+      // 이메일/비밀번호 불일치는 명시적으로 password 필드에 매핑
+      if (e instanceof ApiError && e.isUnauthorized) {
+        setError("password", { message: "이메일 또는 비밀번호가 올바르지 않습니다." });
+        return;
       }
+      applyApiErrors(setError, e, LOGIN_FIELDS);
     }
   });
 

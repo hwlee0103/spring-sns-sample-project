@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useLoginMutation } from "@/features/auth/hooks/useLoginMutation";
 import { registerUser } from "@/features/user/api";
-import { ApiError } from "@/lib/api";
+import { applyApiErrors } from "@/lib/form-utils";
 
 // 백엔드 UserCreateRequest 검증과 동일한 규칙
 const signupSchema = z.object({
@@ -27,6 +27,8 @@ const signupSchema = z.object({
 });
 
 type SignupValues = z.infer<typeof signupSchema>;
+
+const SIGNUP_FIELDS = ["email", "password", "nickname"] as const;
 
 export function SignupForm() {
   const router = useRouter();
@@ -44,22 +46,26 @@ export function SignupForm() {
   });
 
   const onSubmit = handleSubmit(async (values) => {
+    // 1단계: 가입
     try {
       await signupMutation.mutateAsync(values);
-      // 가입 후 자동 로그인
+    } catch (e) {
+      applyApiErrors(setError, e, SIGNUP_FIELDS);
+      return;
+    }
+
+    // 2단계: 자동 로그인 (가입은 이미 성공)
+    try {
       await loginMutation.mutateAsync({ email: values.email, password: values.password });
       router.push("/");
       router.refresh();
-    } catch (e) {
-      if (e instanceof ApiError && e.fieldErrors) {
-        for (const [field, message] of Object.entries(e.fieldErrors)) {
-          setError(field as keyof SignupValues, { message });
-        }
-        return;
-      }
-      if (e instanceof ApiError) {
-        setError("root", { message: e.message });
-      }
+    } catch {
+      // 가입은 됐는데 로그인만 실패 — 사용자가 혼란하지 않도록 명확히 안내
+      setError("root", {
+        message: "가입은 완료되었습니다. 로그인 페이지에서 다시 로그인해주세요.",
+      });
+      // 일정 시간 후 로그인 페이지로 자동 이동
+      setTimeout(() => router.push("/login"), 2000);
     }
   });
 

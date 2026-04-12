@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useCreatePostMutation } from "@/features/post/hooks/useCreatePostMutation";
 import { POST_MAX_LENGTH } from "@/features/post/types";
-import { ApiError } from "@/lib/api";
+import { applyApiErrors } from "@/lib/form-utils";
 
 const composerSchema = z.object({
   content: z
@@ -18,6 +18,8 @@ const composerSchema = z.object({
 });
 
 type ComposerValues = z.infer<typeof composerSchema>;
+
+const COMPOSER_FIELDS = ["content"] as const;
 
 export function PostComposer() {
   const createMutation = useCreatePostMutation();
@@ -34,21 +36,14 @@ export function PostComposer() {
   });
 
   const content = watch("content");
+  const trimmedLength = content.trim().length;
 
   const onSubmit = handleSubmit(async (values) => {
     try {
       await createMutation.mutateAsync(values);
       reset();
     } catch (e) {
-      if (e instanceof ApiError && e.fieldErrors) {
-        for (const [field, message] of Object.entries(e.fieldErrors)) {
-          setError(field as keyof ComposerValues, { message });
-        }
-        return;
-      }
-      if (e instanceof ApiError) {
-        setError("root", { message: e.message });
-      }
+      applyApiErrors(setError, e, COMPOSER_FIELDS);
     }
   });
 
@@ -65,9 +60,9 @@ export function PostComposer() {
       {errors.root && <p className="text-destructive mt-1 text-sm">{errors.root.message}</p>}
       <div className="mt-3 flex items-center justify-between">
         <span className="text-muted-foreground text-xs">
-          {content.length} / {POST_MAX_LENGTH}
+          {trimmedLength} / {POST_MAX_LENGTH}
         </span>
-        <Button type="submit" disabled={isSubmitting || content.trim().length === 0} size="sm">
+        <Button type="submit" disabled={isSubmitting || trimmedLength === 0} size="sm">
           {isSubmitting ? "게시 중..." : "게시"}
         </Button>
       </div>

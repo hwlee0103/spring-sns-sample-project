@@ -2,18 +2,20 @@ package com.lecture.spring_sns_sample_project.controller;
 
 import com.lecture.spring_sns_sample_project.controller.dto.LoginRequest;
 import com.lecture.spring_sns_sample_project.controller.dto.UserResponse;
-import com.lecture.spring_sns_sample_project.domain.user.AuthUser;
 import com.lecture.spring_sns_sample_project.domain.user.User;
+import com.lecture.spring_sns_sample_project.domain.user.UserException;
 import com.lecture.spring_sns_sample_project.domain.user.UserService;
+import com.lecture.spring_sns_sample_project.domain.user.security.AuthUser;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -54,17 +56,37 @@ public class AuthController {
 
       User user = userService.getByEmail(request.email());
       return ResponseEntity.ok(UserResponse.from(user));
-    } catch (BadCredentialsException e) {
+    } catch (AuthenticationException e) {
+      // BadCredentials, Locked, Disabled, AccountExpired 등 모든 인증 예외를 401 로 통일
       return ResponseEntity.status(401).build();
     }
   }
 
   @GetMapping("/api/auth/me")
-  public ResponseEntity<UserResponse> me(@AuthenticationPrincipal AuthUser authUser) {
-    if (authUser == null) {
+  public ResponseEntity<UserResponse> me(
+      @AuthenticationPrincipal AuthUser authUser, HttpServletRequest httpRequest) {
+    try {
+      User user = userService.getById(authUser.getId());
+
+      // tokenVersion 비교 — 비밀번호 변경 등으로 version 이 올라갔으면 이 세션을 무효화
+      if (authUser.getTokenVersion() != user.getTokenVersion()) {
+        invalidateSession(httpRequest);
+        return ResponseEntity.status(401).build();
+      }
+
+      return ResponseEntity.ok(UserResponse.from(user));
+    } catch (UserException e) {
+      // 세션은 살아있지만 사용자가 DB 에서 삭제된 경우
+      invalidateSession(httpRequest);
       return ResponseEntity.status(401).build();
     }
-    User user = userService.getById(authUser.getId());
-    return ResponseEntity.ok(UserResponse.from(user));
+  }
+
+  private static void invalidateSession(HttpServletRequest httpRequest) {
+    HttpSession session = httpRequest.getSession(false);
+    if (session != null) {
+      session.invalidate();
+    }
+    SecurityContextHolder.clearContext();
   }
 }

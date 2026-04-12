@@ -15,15 +15,27 @@ public class UserService {
   private final UserRepository userRepository;
   private final PasswordEncoder passwordEncoder;
 
-  public User register(User user) {
-    if (userRepository.existsByEmail(user.getEmail())) {
-      throw UserException.emailAlreadyExists(user.getEmail());
+  /**
+   * 회원가입.
+   *
+   * <p>raw 입력값을 검증한 뒤 비밀번호를 인코딩하여 Entity 를 생성한다. {@code register} 와 {@link #update} 모두 동일하게 Service
+   * 가 인코딩을 책임진다 (Entity 는 PasswordEncoder 에 의존하지 않음).
+   */
+  public User register(String email, String rawPassword, String nickname) {
+    validateEmail(email);
+    validateRawPassword(rawPassword);
+    validateNickname(nickname);
+
+    if (userRepository.existsByEmail(email)) {
+      throw UserException.emailAlreadyExists(email);
     }
-    user.encodePassword(passwordEncoder);
+
+    User user = new User(email, passwordEncoder.encode(rawPassword), nickname);
     try {
       return userRepository.save(user);
     } catch (DataIntegrityViolationException e) {
-      throw UserException.emailAlreadyExists(user.getEmail());
+      // existsByEmail 과 save 사이 race condition 방어 — DB unique 제약으로 최종 보장
+      throw UserException.emailAlreadyExists(email);
     }
   }
 
@@ -42,19 +54,52 @@ public class UserService {
   }
 
   @Transactional
-  public User update(Long id, String nickname, String password) {
-    if (password == null || password.isBlank()) {
-      throw UserException.invalidField("password");
-    }
+  public User update(Long id, UserUpdateCommand command) {
+    validateNickname(command.nickname());
+    validateRawPassword(command.rawPassword());
     User user = userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
-    user.update(nickname, passwordEncoder.encode(password));
+    user.update(command.nickname(), passwordEncoder.encode(command.rawPassword()));
     return user;
   }
 
-  public void delete(Long id) {
-    if (!userRepository.existsById(id)) {
-      throw UserException.notFound(id);
+  /**
+   * 비밀번호 변경 — 현재 비밀번호 재확인 후 새 비밀번호로 교체.
+   *
+   * <p>tokenVersion 을 증가시켜 다른 디바이스의 세션을 자동 무효화한다.
+   */
+  @Transactional
+  public User changePassword(Long id, String currentRawPassword, String newRawPassword) {
+    validateRawPassword(newRawPassword);
+    User user = userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
+    if (!passwordEncoder.matches(currentRawPassword, user.getPassword())) {
+      throw UserException.invalidCredentials();
     }
-    userRepository.deleteById(id);
+    user.update(user.getNickname(), passwordEncoder.encode(newRawPassword));
+    user.bumpTokenVersion();
+    return user;
+  }
+
+  @Transactional
+  public void delete(Long id) {
+    User user = userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
+    userRepository.delete(user);
+  }
+
+  private static void validateEmail(String email) {
+    if (email == null || email.isBlank()) {
+      throw UserException.invalidField("email");
+    }
+  }
+
+  private static void validateRawPassword(String rawPassword) {
+    if (rawPassword == null || rawPassword.isBlank()) {
+      throw UserException.invalidField("password");
+    }
+  }
+
+  private static void validateNickname(String nickname) {
+    if (nickname == null || nickname.isBlank()) {
+      throw UserException.invalidField("nickname");
+    }
   }
 }
