@@ -10,7 +10,7 @@
 | 항목 | 구현 |
 |------|------|
 | 메커니즘 | Spring Security 6 + `HttpSessionSecurityContextRepository` |
-| 비밀번호 | Argon2 (PasswordEncoderConfig — `Argon2PasswordEncoder`) |
+| 비밀번호 | Argon2id (`Argon2Password4jPasswordEncoder` — password4j 기반) |
 | Principal | 커스텀 `AuthUser`(id/email) — `UserDetailsServiceImpl` 가 로드 |
 | 세션 ID | `JSESSIONID` (서버 메모리 저장) |
 | 세션 고정 방어 | `ChangeSessionIdAuthenticationStrategy` 빈 |
@@ -331,10 +331,36 @@ POST /api/auth/logout
 
 ## 9. 비밀번호 / 자격증명 관리
 
+### 9.1 PasswordEncoder 구현
+
+| 항목 | 값 |
+|------|------|
+| 구현 클래스 | `Argon2Password4jPasswordEncoder` (Spring Security 7.x 권장) |
+| 라이브러리 | `com.password4j:password4j:1.8.2` |
+| 설정 파일 | `src/main/resources/psw4j.properties` |
+| 이전 구현 | `Argon2PasswordEncoder` (BouncyCastle) — **Spring Security 7 에서 @Deprecated** |
+| 호환성 | 두 구현 모두 Argon2id 표준 포맷 (`$argon2id$v=19$m=...`) — 기존 DB hash 와 호환 |
+
+**psw4j.properties 파라미터:**
+
+| 파라미터 | 값 | 설명 |
+|---------|-----|------|
+| `hash.argon2.memory` | 19456 (19MB) | 메모리 비용 — Spring Security 5.8 기본값과 동등 |
+| `hash.argon2.iterations` | 2 | 시간 비용 (반복 횟수) |
+| `hash.argon2.length` | 32 | 해시 출력 길이 (bytes) |
+| `hash.argon2.parallelism` | 1 | 병렬도 |
+| `hash.argon2.type` | id | Argon2**id** (side-channel + GPU 동시 방어) |
+| `hash.argon2.version` | 19 | Argon2 표준 버전 |
+| `global.salt.length` | 16 | Salt 길이 (bytes) |
+
+> **주의**: `psw4j.properties` 가 없으면 password4j 가 기동 시 WARN 로그 7건을 출력한다. 동작에 영향은 없으나 로그가 노이즈가 됨.
+> 미설정 시 password4j 기본값(`memory=15360`, `salt=64`)은 Spring Security 5.8 기본값(`memory=19456`, `salt=16`)과 다르므로 명시적 설정 필수.
+
+### 9.2 비밀번호 정책 / 관리
+
 | 항목 | 권장 |
 |------|------|
 | 해싱 알고리즘 | **Argon2id** (현재 ✅) |
-| 파라미터 | Argon2 default — 메모리 64MB 이상, time 3, parallelism 1+ |
 | 평문 노출 | 절대 금지 (로그, 응답, DB 모두) |
 | 비밀번호 정책 | min 8, max 64, 단순 길이만. 복잡도 강제는 비권장 (NIST 800-63B) |
 | 비밀번호 변경 | 현재 비밀번호 재입력 필수 (TODO — 현재 미구현) |
