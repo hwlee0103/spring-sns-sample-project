@@ -1,7 +1,7 @@
 package com.lecture.spring_sns_sample_project.domain.user;
 
+import com.lecture.spring_sns_sample_project.config.ErrorType;
 import com.lecture.spring_sns_sample_project.domain.common.DomainException;
-import com.lecture.spring_sns_sample_project.domain.common.ErrorType;
 
 /**
  * 사용자 도메인 예외.

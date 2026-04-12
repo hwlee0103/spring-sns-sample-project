@@ -40,7 +40,7 @@ public class SecurityConfig {
                     // H2 콘솔은 dev 편의를 위해 CSRF 면제
                     .ignoringRequestMatchers("/h2-console/**"))
         // 모든 응답에서 CSRF 쿠키를 강제 materialize
-        .addFilterAfter(new CsrfCookieFilter(), BasicAuthenticationFilter.class)
+        .addFilterAfter(csrfCookieFilter(), BasicAuthenticationFilter.class)
         .sessionManagement(
             session -> session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
         .authorizeHttpRequests(
@@ -86,6 +86,11 @@ public class SecurityConfig {
                 }));
 
     return http.build();
+  }
+
+  @Bean
+  public CsrfCookieFilter csrfCookieFilter() {
+    return new CsrfCookieFilter();
   }
 
   @Bean

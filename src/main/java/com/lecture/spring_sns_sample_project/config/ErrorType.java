@@ -1,4 +1,4 @@
-package com.lecture.spring_sns_sample_project.domain.common;
+package com.lecture.spring_sns_sample_project.config;
 
 import org.springframework.http.HttpStatus;
 
