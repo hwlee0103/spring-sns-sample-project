@@ -11,7 +11,7 @@ export const PostSchema = z.object({
   id: z.number(),
   content: z.string(),
   author: UserSchema,
-  createdAt: z.string().transform((s) => new Date(s)),
+  createdAt: z.coerce.date(),
 });
 
 export type Post = z.infer<typeof PostSchema>;
