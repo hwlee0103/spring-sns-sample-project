@@ -29,6 +29,8 @@ public class SecurityConfig {
   @Bean
   public SecurityFilterChain securityFilterChain(HttpSecurity http, Environment env)
       throws Exception {
+    boolean devProfile = Arrays.asList(env.getActiveProfiles()).contains("dev");
+
     // CSRF: 쿠키 기반 (XSRF-TOKEN), JS 가 읽을 수 있도록 HttpOnly 비활성
     CookieCsrfTokenRepository csrfTokenRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
     // XorCsrfTokenRequestAttributeHandler: 토큰을 XOR 마스킹하여 BREACH 압축 공격 완화
@@ -60,7 +62,10 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.GET, "/api/user", "/api/user/*")
                     .permitAll() // 사용자 프로필 열람
                     .requestMatchers("/h2-console/**")
-                    .permitAll()
+                    .access(
+                        (authentication, context) ->
+                            new org.springframework.security.authorization.AuthorizationDecision(
+                                devProfile))
                     // 그 외 모두 인증 필요 (/api/auth/me 포함 — 비로그인은 401 반환)
                     .anyRequest()
                     .authenticated())
@@ -75,8 +80,6 @@ public class SecurityConfig {
                 logout
                     .logoutUrl("/api/auth/logout")
                     .logoutSuccessHandler((req, res, authentication) -> res.setStatus(204)));
-
-    boolean devProfile = Arrays.asList(env.getActiveProfiles()).contains("dev");
 
     // 헤더 보안 — frameOptions + CSP
     http.headers(
