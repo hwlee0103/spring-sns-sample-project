@@ -8,6 +8,8 @@ import com.lecture.spring_sns_sample_project.controller.dto.UserUpdateRequest;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserService;
 import com.lecture.spring_sns_sample_project.domain.user.security.AuthUser;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import java.net.URI;
 import lombok.RequiredArgsConstructor;
@@ -15,7 +17,11 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,6 +35,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class UserController {
 
   private final UserService userService;
+  private final SecurityContextRepository securityContextRepository;
 
   @PostMapping("/api/user")
   public ResponseEntity<UserResponse> register(@Valid @RequestBody UserCreateRequest request) {
@@ -53,7 +60,10 @@ public class UserController {
 
   @PutMapping("/api/user/{id}")
   public ResponseEntity<UserResponse> updateUser(
-      @PathVariable Long id, @Valid @RequestBody UserUpdateRequest request) {
+      @PathVariable Long id,
+      @Valid @RequestBody UserUpdateRequest request,
+      @AuthenticationPrincipal AuthUser authUser) {
+    requireOwnership(authUser, id);
     User user = userService.update(id, request.toCommand());
     return ResponseEntity.ok(UserResponse.from(user));
   }
@@ -62,17 +72,43 @@ public class UserController {
   public ResponseEntity<Void> changePassword(
       @PathVariable Long id,
       @Valid @RequestBody ChangePasswordRequest request,
-      @AuthenticationPrincipal AuthUser authUser) {
-    if (authUser == null || !authUser.getId().equals(id)) {
-      return ResponseEntity.status(403).build();
-    }
-    userService.changePassword(id, request.currentPassword(), request.newPassword());
+      @AuthenticationPrincipal AuthUser authUser,
+      HttpServletRequest httpRequest,
+      HttpServletResponse httpResponse) {
+    requireOwnership(authUser, id);
+    User updatedUser =
+        userService.changePassword(id, request.currentPassword(), request.newPassword());
+    // 현재 세션의 AuthUser 를 새 tokenVersion 으로 갱신 — 본인 세션이 즉시 무효화되지 않도록
+    refreshSecurityContext(updatedUser, httpRequest, httpResponse);
     return ResponseEntity.noContent().build();
   }
 
   @DeleteMapping("/api/user/{id}")
-  public ResponseEntity<Void> deleteUser(@PathVariable Long id) {
+  public ResponseEntity<Void> deleteUser(
+      @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
+    requireOwnership(authUser, id);
     userService.delete(id);
     return ResponseEntity.noContent().build();
+  }
+
+  /** 본인 리소스인지 검증 — IDOR(Insecure Direct Object Reference) 방어. */
+  private static void requireOwnership(AuthUser authUser, Long targetId) {
+    if (authUser == null || !authUser.getId().equals(targetId)) {
+      throw new org.springframework.security.access.AccessDeniedException(
+          "본인의 리소스만 수정/삭제할 수 있습니다.");
+    }
+  }
+
+  /** 비밀번호 변경 후 현재 세션의 AuthUser 를 새 tokenVersion 으로 갱신. */
+  private void refreshSecurityContext(
+      User updatedUser, HttpServletRequest request, HttpServletResponse response) {
+    AuthUser newAuthUser = AuthUser.from(updatedUser);
+    UsernamePasswordAuthenticationToken newAuth =
+        new UsernamePasswordAuthenticationToken(
+            newAuthUser, newAuthUser.getPassword(), newAuthUser.getAuthorities());
+    SecurityContext context = SecurityContextHolder.createEmptyContext();
+    context.setAuthentication(newAuth);
+    SecurityContextHolder.setContext(context);
+    securityContextRepository.saveContext(context, request, response);
   }
 }
