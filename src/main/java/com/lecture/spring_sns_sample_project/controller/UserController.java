@@ -1,11 +1,13 @@
 package com.lecture.spring_sns_sample_project.controller;
 
+import com.lecture.spring_sns_sample_project.controller.dto.ChangePasswordRequest;
 import com.lecture.spring_sns_sample_project.controller.dto.PageResponse;
 import com.lecture.spring_sns_sample_project.controller.dto.UserCreateRequest;
 import com.lecture.spring_sns_sample_project.controller.dto.UserResponse;
 import com.lecture.spring_sns_sample_project.controller.dto.UserUpdateRequest;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserService;
+import com.lecture.spring_sns_sample_project.domain.user.security.AuthUser;
 import jakarta.validation.Valid;
 import java.net.URI;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +15,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -53,6 +56,18 @@ public class UserController {
       @PathVariable Long id, @Valid @RequestBody UserUpdateRequest request) {
     User user = userService.update(id, request.toCommand());
     return ResponseEntity.ok(UserResponse.from(user));
+  }
+
+  @PutMapping("/api/user/{id}/password")
+  public ResponseEntity<Void> changePassword(
+      @PathVariable Long id,
+      @Valid @RequestBody ChangePasswordRequest request,
+      @AuthenticationPrincipal AuthUser authUser) {
+    if (authUser == null || !authUser.getId().equals(id)) {
+      return ResponseEntity.status(403).build();
+    }
+    userService.changePassword(id, request.currentPassword(), request.newPassword());
+    return ResponseEntity.noContent().build();
   }
 
   @DeleteMapping("/api/user/{id}")

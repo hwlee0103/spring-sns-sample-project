@@ -65,18 +65,28 @@ public class AuthController {
   @GetMapping("/api/auth/me")
   public ResponseEntity<UserResponse> me(
       @AuthenticationPrincipal AuthUser authUser, HttpServletRequest httpRequest) {
-    // SecurityConfig 에서 authenticated() 로 보호되므로 authUser 는 항상 비-null
     try {
       User user = userService.getById(authUser.getId());
+
+      // tokenVersion 비교 — 비밀번호 변경 등으로 version 이 올라갔으면 이 세션을 무효화
+      if (authUser.getTokenVersion() != user.getTokenVersion()) {
+        invalidateSession(httpRequest);
+        return ResponseEntity.status(401).build();
+      }
+
       return ResponseEntity.ok(UserResponse.from(user));
     } catch (UserException e) {
-      // 세션은 살아있지만 사용자가 DB 에서 삭제된 경우 — 세션을 즉시 무효화하고 401 반환
-      HttpSession session = httpRequest.getSession(false);
-      if (session != null) {
-        session.invalidate();
-      }
-      SecurityContextHolder.clearContext();
+      // 세션은 살아있지만 사용자가 DB 에서 삭제된 경우
+      invalidateSession(httpRequest);
       return ResponseEntity.status(401).build();
     }
+  }
+
+  private static void invalidateSession(HttpServletRequest httpRequest) {
+    HttpSession session = httpRequest.getSession(false);
+    if (session != null) {
+      session.invalidate();
+    }
+    SecurityContextHolder.clearContext();
   }
 }

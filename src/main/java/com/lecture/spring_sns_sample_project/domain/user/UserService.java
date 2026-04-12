@@ -62,6 +62,23 @@ public class UserService {
     return user;
   }
 
+  /**
+   * 비밀번호 변경 — 현재 비밀번호 재확인 후 새 비밀번호로 교체.
+   *
+   * <p>tokenVersion 을 증가시켜 다른 디바이스의 세션을 자동 무효화한다.
+   */
+  @Transactional
+  public User changePassword(Long id, String currentRawPassword, String newRawPassword) {
+    validateRawPassword(newRawPassword);
+    User user = userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
+    if (!passwordEncoder.matches(currentRawPassword, user.getPassword())) {
+      throw UserException.invalidCredentials();
+    }
+    user.update(user.getNickname(), passwordEncoder.encode(newRawPassword));
+    user.bumpTokenVersion();
+    return user;
+  }
+
   @Transactional
   public void delete(Long id) {
     User user = userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));

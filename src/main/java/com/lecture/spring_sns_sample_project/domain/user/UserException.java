@@ -29,4 +29,8 @@ public class UserException extends DomainException {
   public static UserException invalidField(String fieldName) {
     return new UserException(ErrorType.BAD_REQUEST, fieldName + " 값이 비어 있을 수 없습니다.");
   }
+
+  public static UserException invalidCredentials() {
+    return new UserException(ErrorType.BAD_REQUEST, "현재 비밀번호가 올바르지 않습니다.");
+  }
 }

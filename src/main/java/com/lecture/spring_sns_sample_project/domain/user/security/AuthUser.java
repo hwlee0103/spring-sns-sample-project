@@ -8,8 +8,8 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
 /**
- * Spring Security `Principal` 로 사용되는 커스텀 UserDetails. {@link User} 의 id/email 을 동시에 보관하여, 권한 체크 시
- * 추가 DB 조회 없이 작성자 식별이 가능하다.
+ * Spring Security `Principal` 로 사용되는 커스텀 UserDetails. {@link User} 의 id/email/tokenVersion 을 동시에
+ * 보관하여, 권한 체크 및 세션 유효성 검증 시 추가 DB 조회를 최소화한다.
  */
 @Getter
 public class AuthUser implements UserDetails {
@@ -17,15 +17,17 @@ public class AuthUser implements UserDetails {
   private final Long id;
   private final String email;
   private final String password;
+  private final int tokenVersion;
 
-  public AuthUser(Long id, String email, String password) {
+  public AuthUser(Long id, String email, String password, int tokenVersion) {
     this.id = id;
     this.email = email;
     this.password = password;
+    this.tokenVersion = tokenVersion;
   }
 
   public static AuthUser from(User user) {
-    return new AuthUser(user.getId(), user.getEmail(), user.getPassword());
+    return new AuthUser(user.getId(), user.getEmail(), user.getPassword(), user.getTokenVersion());
   }
 
   @Override
