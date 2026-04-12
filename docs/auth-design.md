@@ -341,6 +341,53 @@ POST /api/auth/logout
 | 이전 구현 | `Argon2PasswordEncoder` (BouncyCastle) — **Spring Security 7 에서 @Deprecated** |
 | 호환성 | 두 구현 모두 Argon2id 표준 포맷 (`$argon2id$v=19$m=...`) — 기존 DB hash 와 호환 |
 
+#### 왜 Argon2id 인가 — 알고리즘 선택 사유
+
+비밀번호 해싱 알고리즘은 **BCrypt → SCrypt → Argon2** 순서로 발전해왔다. 각각의 특성과 본 프로젝트에서 Argon2id 를 선택한 근거:
+
+| 알고리즘 | 특징 | 한계 |
+|---------|------|------|
+| **BCrypt** | CPU-hard. 20년+ 검증. Spring Security 기본 | 메모리 소비가 적어 GPU/ASIC 공격에 상대적으로 취약 |
+| **SCrypt** | CPU + memory-hard. BCrypt 대비 GPU 방어 우위 | 파라미터 튜닝이 복잡 (N, r, p 3개). 일부 구현에 사이드채널 취약점 |
+| **Argon2id** | CPU + memory-hard + **side-channel 방어**. 2015 PHC 우승 | 상대적으로 신규. 라이브러리 지원 이력이 짧음 |
+
+**Argon2id 선택 근거:**
+
+1. **PHC (Password Hashing Competition) 2015 우승** — 학술·산업계 검증을 거친 현시점 최강 알고리즘
+2. **memory-hard** — GPU/ASIC 병렬 공격 비용을 선형이 아닌 메모리 비례로 증가시켜 대규모 크래킹을 비경제적으로 만듦
+3. **Argon2id = Argon2i + Argon2d 결합** — side-channel 공격(timing, cache)과 GPU 공격을 동시에 방어. 서버 환경에서 가장 안전한 변형
+4. **OWASP 권장** — OWASP Password Storage Cheat Sheet 에서 Argon2id 를 1순위로 권장
+5. **NIST SP 800-63B 부합** — memory-hard function 사용 권고에 부합
+6. **Spring Security 7 공식 지원** — `Argon2Password4jPasswordEncoder` 로 1급 지원, 별도 구현 불필요
+
+> **BCrypt 를 선택하지 않은 이유**: BCrypt 는 4KB 고정 메모리만 사용하여 GPU 에서 대량 병렬 실행이 가능하다.
+> 현대 GPU (RTX 4090 기준) 로 BCrypt cost=12 에서 초당 약 2만 hash 를 시도할 수 있지만,
+> Argon2id (memory=19MB) 에서는 GPU 메모리 제약으로 병렬도가 극적으로 제한된다.
+
+> **SCrypt 를 선택하지 않은 이유**: SCrypt 는 memory-hard 지만 Argon2 대비 파라미터 튜닝이 복잡하고 (N, r, p 세 축을 개별 조정),
+> side-channel 방어가 약하며, Spring Security 7 에서 `Argon2Password4jPasswordEncoder` 가 1급 지원되는 반면
+> SCrypt 는 BouncyCastle 기반 deprecated 구현만 남아 있다.
+
+#### 왜 password4j 라이브러리인가 — BouncyCastle 에서 교체된 사유
+
+| 비교 항목 | BouncyCastle (`Argon2PasswordEncoder`) | password4j (`Argon2Password4jPasswordEncoder`) |
+|----------|---------------------------------------|-----------------------------------------------|
+| Spring Security 7 상태 | **@Deprecated** | 권장 (신규 `password4j` 패키지) |
+| 라이브러리 크기 | BouncyCastle 전체 (~5.8MB jar) | password4j (~120KB jar) |
+| 용도 | 범용 암호화 라이브러리 (TLS, PGP, ...) | 비밀번호 해싱 전용 |
+| 의존성 특성 | 너무 큰 범위 — 비밀번호 해싱만 필요한데 전체 암호 라이브러리 의존 | 경량, 단일 목적 |
+| 설정 | Java 코드 파라미터 | `psw4j.properties` 외부 설정 (코드 변경 없이 파라미터 튜닝 가능) |
+| Argon2 구현 | BouncyCastle 자체 구현 | password4j 자체 구현 (Reference C 구현 포팅) |
+| 해시 포맷 호환 | `$argon2id$v=19$m=...` 표준 | `$argon2id$v=19$m=...` 동일 표준 — **기존 DB hash 호환** |
+
+**교체 근거:**
+
+1. **Spring Security 7 에서 기존 클래스 @Deprecated** — 유지보수/보안 패치를 기대할 수 없음
+2. **경량 의존성** — BouncyCastle(5.8MB) 대신 password4j(120KB) 로 빌드 크기 절감
+3. **외부 설정 지원** — `psw4j.properties` 로 코드 변경 없이 파라미터 튜닝 가능 (운영 중 보안 수준 상향 시 재배포만으로 적용)
+4. **DB 호환성 유지** — 동일 Argon2id 표준 포맷이라 기존 비밀번호 hash 가 그대로 동작
+5. **단일 목적 라이브러리** — 비밀번호 해싱에만 집중하여 보안 감사 범위가 작고 유지보수 부담 낮음
+
 **psw4j.properties 파라미터:**
 
 | 파라미터 | 값 | 설명 |
