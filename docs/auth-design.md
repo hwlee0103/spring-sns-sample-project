@@ -7,20 +7,29 @@
 
 ## 1. 현재 상태 요약
 
-| 항목 | 구현 |
-|------|------|
-| 메커니즘 | Spring Security 6 + `HttpSessionSecurityContextRepository` |
-| 비밀번호 | Argon2id (`Argon2Password4jPasswordEncoder` — password4j 기반) |
-| Principal | 커스텀 `AuthUser`(id/email) — `UserDetailsServiceImpl` 가 로드 |
-| 세션 ID | `JSESSIONID` (서버 메모리 저장) |
-| 세션 고정 방어 | `ChangeSessionIdAuthenticationStrategy` 빈 |
-| CSRF | `CookieCsrfTokenRepository.withHttpOnlyFalse()` + `CsrfCookieFilter` (lazy materialize) |
-| 로그인 | `POST /api/auth/login` 수동 authenticate + 세션 저장 |
-| 현재 사용자 | `GET /api/auth/me` (`@AuthenticationPrincipal AuthUser`) |
-| 로그아웃 | `POST /api/auth/logout` (Spring Security `logout()` DSL) |
-| 프론트 ↔ 백 | Next.js rewrites 로 same-origin 프록시, 쿠키 자동 첨부 |
-| 인증 예외 | `unauthorizedEntryPoint` 가 401 통일 |
-| 타이밍 공격 방어 | `UserDetailsServiceImpl` 가 더미 hash matches 호출 |
+| 항목 | 구현 | 적용 일자 |
+|------|------|-----------|
+| 메커니즘 | Spring Security 6 + `HttpSessionSecurityContextRepository` | 04-11 |
+| 비밀번호 해싱 | Argon2id (`Argon2Password4jPasswordEncoder` — password4j 1.8.2) | 04-12 |
+| Principal | 커스텀 `AuthUser`(id/email/tokenVersion) — `UserDetailsServiceImpl` 가 로드 | 04-11 |
+| 세션 ID | `JSESSIONID` (서버 메모리 저장) | 04-11 |
+| 세션 고정 방어 | `ChangeSessionIdAuthenticationStrategy` — 로그인 시 세션 ID 재발급 | 04-11 |
+| CSRF | `CookieCsrfTokenRepository` + **`XorCsrfTokenRequestAttributeHandler`** (BREACH 완화) + `CsrfCookieFilter` | 04-12 |
+| 로그인 | `POST /api/auth/login` 수동 authenticate + 세션 저장 | 04-11 |
+| 비밀번호 변경 | `PUT /api/user/{id}/password` — 현재 비밀번호 재확인 + tokenVersion bump | 04-12 |
+| token version | `User.tokenVersion` + `AuthUser.tokenVersion` → `/api/auth/me` 에서 비교, 불일치 시 세션 무효화 | 04-12 |
+| 현재 사용자 | `GET /api/auth/me` (`@AuthenticationPrincipal AuthUser`) + tokenVersion 검증 | 04-11 |
+| 로그아웃 | `POST /api/auth/logout` (Spring Security `logout()` DSL) | 04-11 |
+| 인가 (IDOR 방어) | `requireOwnership(authUser, id)` — PUT/DELETE /api/user/{id} 본인 검증 | 04-13 |
+| Rate limiting | `RateLimitFilter` (Bucket4j) — IP 기반 분당 20회, XFF 불신 | 04-12 |
+| Audit log | `AuthEventListener` — 로그인 성공/실패/로그아웃 이벤트 감사 로깅 | 04-12 |
+| 운영 cookie | `application-prod.yaml` — secure, http-only, same-site lax, timeout 30m | 04-12 |
+| HTTPS 강제 | `SecurityConfig` — prod 프로필에서만 `requiresChannel().requiresSecure()` | 04-12 |
+| CSP 헤더 | `Content-Security-Policy: default-src 'self'; script-src 'self'` | 04-12 |
+| H2 콘솔 제한 | `SecurityConfig` — dev 프로필에서만 접근 허용 (`AuthorizationDecision`) | 04-13 |
+| 프론트 ↔ 백 | Next.js rewrites 로 same-origin 프록시, 쿠키 + XSRF-TOKEN 자동 첨부 | 04-11 |
+| 인증 예외 | `unauthorizedEntryPoint` 가 401 통일 + `AuthenticationException` 전체 catch | 04-11 |
+| 타이밍 공격 방어 | `UserDetailsServiceImpl` 가 더미 hash `passwordEncoder.matches` 호출 | 04-11 |
 
 ---
 
@@ -488,13 +497,15 @@ server:
 - 401 entry point
 - frameOptions dev profile
 
-### Phase 1 — 즉시 권장 (현재 미구현)
-1. **Rate limiting** (Bucket4j) — 로그인/가입에 우선 적용
-2. **비밀번호 변경 흐름** — 현재 비밀번호 재확인
-3. **Token version 컬럼** — 비밀번호 변경 시 모든 세션 무효화
-4. **운영 cookie 속성** — `secure`, `same-site=lax`, idle timeout 30m
-5. **HTTPS 강제** (운영 배포 시) — `requiresChannel().anyRequest().requiresSecure()` 또는 reverse proxy 처리
-6. **Logging**: 인증 성공/실패 audit log (`AuthenticationFailureBadCredentialsEvent` 리스너)
+### Phase 1 — 즉시 권장 ✅ (2026-04-12 완료)
+1. ✅ **Rate limiting** (Bucket4j) — `RateLimitFilter`, IP 기반 분당 20회, XFF 불신
+2. ✅ **비밀번호 변경 흐름** — `PUT /api/user/{id}/password`, 현재 비밀번호 재확인
+3. ✅ **Token version 컬럼** — 비밀번호 변경 시 모든 세션 무효화 + 현재 세션 갱신
+4. ✅ **운영 cookie 속성** — `application-prod.yaml` (secure, same-site lax, 30m)
+5. ✅ **HTTPS 강제** — prod 프로필 `requiresChannel().requiresSecure()`
+6. ✅ **Audit log** — `AuthEventListener` (@EventListener 성공/실패/로그아웃)
+7. ✅ **XorCsrfTokenRequestAttributeHandler** — BREACH 압축 공격 완화
+8. ✅ **Content-Security-Policy** — `default-src 'self'; script-src 'self'`
 
 ### Phase 2 — SNS 기능 확장 시
 1. **Role 도입** — User/Admin
@@ -531,24 +542,141 @@ server:
 
 ---
 
-## 13. 본 프로젝트 적용 우선순위 (실행 가능한 순서)
+## 13. 적용 이력 — Phase 1 구현 + 보안 취약점 수정
 
-| 우선 | 작업 | 예상 영향 |
-|------|------|----------|
-| 1 | Phase 1.1 (Rate limiting) | 무차별 대입 차단 — 즉시 |
-| 2 | Phase 1.3 (Token version + 비밀번호 변경 시 invalidate) | 비밀번호 노출 사고 대응력 — 중간 |
-| 3 | Phase 1.4 (운영 cookie 속성) | HTTPS 환경 보안 — 배포 직전 |
-| 4 | Phase 1.6 (인증 audit log) | 침해 사고 분석 — 중간 |
-| 5 | Phase 2.2/2.3 (이메일 인증 + 비밀번호 재설정) | 사용자 신뢰도 — SNS 가입 폭 |
-| 6 | Phase 3.1 (Spring Session + Redis) | 다중 인스턴스 준비 — 트래픽 증가 시 |
+### 13.1 Phase 1 구현 상세 (2026-04-12)
+
+#### Rate limiting (`RateLimitFilter.java`)
+
+- **목적**: 인증 엔드포인트에 대한 brute force / credential stuffing 차단
+- **구현**: `OncePerRequestFilter` + Bucket4j `Bandwidth.builder()`. POST `/api/auth/login`, `/api/user` 대상
+- **IP 식별**: `request.getRemoteAddr()` **만** 사용. `X-Forwarded-For` 는 공격자가 임의 값으로 스푸핑 가능하므로 신뢰하지 않음 (운영 환경에서 신뢰 가능한 reverse proxy 뒤에서는 프록시 설정과 연동 필요)
+- **제한**: IP 당 분당 20회. 초과 시 HTTP 429 + JSON 메시지 반환
+- **OOM 방어**: `ConcurrentHashMap` 이 10,000 엔트리 초과 시 자동 정리 (운영에서는 Caffeine 또는 Redis 교체 권장)
+
+```java
+// RateLimitFilter 핵심 흐름
+String clientIp = request.getRemoteAddr(); // XFF 불신
+Bucket bucket = ipBuckets.computeIfAbsent("ip:" + clientIp, k -> createBucket());
+if (!bucket.tryConsume(1)) {
+  response.setStatus(429);
+  return;
+}
+```
+
+#### 비밀번호 변경 + Token version (`UserService.changePassword`, `User.tokenVersion`)
+
+- **목적**: (a) 비밀번호 변경 시 현재 비밀번호 재확인, (b) 변경 후 다른 디바이스 세션 자동 무효화
+- **구현**:
+  1. `User.tokenVersion: int` 컬럼 (기본값 0). 비밀번호 변경 시 `bumpTokenVersion()` 으로 1 증가
+  2. `AuthUser.tokenVersion` 필드 — 로그인 시점의 version 을 세션에 보관
+  3. `GET /api/auth/me` 에서 DB User.tokenVersion vs 세션 AuthUser.tokenVersion 비교
+  4. 불일치 → `session.invalidate()` + `SecurityContextHolder.clearContext()` + 401
+  5. 현재 브라우저(비밀번호를 변경한 본인)는 `refreshSecurityContext()` 로 즉시 AuthUser 갱신하여 로그아웃 방지
+
+```
+[디바이스 A: 비밀번호 변경]     [디바이스 B: 기존 세션]
+  │ PUT /api/user/1/password      │
+  │ → changePassword()            │
+  │ → user.bumpTokenVersion()     │
+  │   (version: 0 → 1)           │
+  │ → refreshSecurityContext()    │
+  │   (세션 AuthUser.version = 1)│
+  │ ← 204 OK                     │
+  │                               │ GET /api/auth/me
+  │                               │ AuthUser.version=0 ≠ DB.version=1
+  │                               │ → session.invalidate()
+  │                               │ ← 401 (세션 만료)
+```
+
+- **한계**: 디바이스 B 의 세션은 `/api/auth/me` 호출 시점에만 무효화됨 (폴링 주기 = 프론트 `useCurrentUser` staleTime 5분). 모든 요청에서 검증하려면 `OncePerRequestFilter` 필요 (Phase 3 Spring Session + Redis 시 도입 권장)
+
+#### 인증 Audit log (`AuthEventListener.java`)
+
+- **목적**: 침해 사고 분석 기반 마련
+- **구현**: `@EventListener` 로 Spring Security 이벤트 수신
+  - `AuthenticationSuccessEvent` → `audit.auth` 로거 INFO: `LOGIN_SUCCESS user=xxx`
+  - `AbstractAuthenticationFailureEvent` → WARN: `LOGIN_FAILURE user=xxx reason=BadCredentialsException`
+  - `LogoutSuccessEvent` → INFO: `LOGOUT user=xxx`
+- **향후**: ELK / Splunk 등 외부 SIEM 으로 수집. IP/UA 추가 기록 (현재는 사용자 식별자만)
+
+#### 운영 보안 설정
+
+| 항목 | 파일 | 설명 |
+|------|------|------|
+| Cookie 속성 | `application-prod.yaml` | `secure: true`, `http-only: true`, `same-site: lax`, `timeout: 30m` |
+| HTTPS 강제 | `SecurityConfig.java` | prod 프로필에서만 `requiresChannel().requiresSecure()` |
+| BREACH 완화 | `SecurityConfig.java` | `CsrfTokenRequestAttributeHandler` → `XorCsrfTokenRequestAttributeHandler` 교체. 토큰을 XOR 마스킹하여 HTTP 압축 기반 토큰 추출 공격 차단 |
+| CSP 헤더 | `SecurityConfig.java` | `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:` |
+
+### 13.2 보안 취약점 수정 이력 (2026-04-13 해커 관점 리뷰)
+
+침투 테스터 관점에서 공격 시나리오 기반으로 리뷰한 결과, Critical 2건 + High 3건을 발견하여 즉시 수정:
+
+#### IDOR (Insecure Direct Object Reference) — Critical
+
+**발견**: `PUT /api/user/{id}` 와 `DELETE /api/user/{id}` 에 본인 검증이 없어, 인증된 아무 사용자가 타인의 프로필·비밀번호를 덮어쓰거나 계정을 삭제할 수 있었음.
+
+**공격 시나리오** (수정 전):
+```bash
+# 공격자(user 2)가 피해자(user 1)의 비밀번호를 자기 것으로 변경
+curl -X PUT http://localhost:8080/api/user/1 \
+  -H "Content-Type: application/json" \
+  -b "JSESSIONID=<공격자 세션>" \
+  -d '{"nickname":"pwned","password":"attacker-pw-123"}'
+# → 200 OK. 이후 공격자가 피해자 계정으로 로그인 가능
+```
+
+**수정**: `@AuthenticationPrincipal AuthUser` 주입 + `requireOwnership(authUser, id)` 유틸 메서드로 본인 리소스 검증. 불일치 시 `AccessDeniedException` 발생 (403).
+
+```java
+private static void requireOwnership(AuthUser authUser, Long targetId) {
+  if (authUser == null || !authUser.getId().equals(targetId)) {
+    throw new AccessDeniedException("본인의 리소스만 수정/삭제할 수 있습니다.");
+  }
+}
+```
+
+**교훈**: PostController 의 `isAuthor()` 패턴은 적용되어 있었지만, UserController 에는 누락. 모든 mutation 엔드포인트에 소유권 검증은 필수.
+
+#### Rate limit XFF 스푸핑 — High
+
+**발견**: `X-Forwarded-For` 헤더를 신뢰하여 공격자가 매 요청마다 다른 IP 를 조작 가능. rate limiting 사실상 무력.
+
+**수정**: `request.getRemoteAddr()` 만 사용. XFF 는 운영 환경의 trusted proxy 뒤에서만 신뢰 가능하며, 직접 노출된 서버에서는 스푸핑 벡터.
+
+#### Rate limit OOM — High
+
+**발견**: `ConcurrentHashMap<String, Bucket>` 에 eviction 없이 무한 증가 가능. XFF 스푸핑으로 수백만 고유 키 생성 시 JVM OOM.
+
+**수정**: 10,000 엔트리 초과 시 맵 자동 정리. 운영에서는 Caffeine (`maximumSize` + `expireAfterWrite`) 또는 Redis 기반으로 교체 권장.
+
+#### changePassword 세션 stale — High
+
+**발견**: 비밀번호 변경 후 현재 세션의 `AuthUser.tokenVersion` 이 구버전으로 유지되어, 다음 `/api/auth/me` 호출 시 본인이 로그아웃됨.
+
+**수정**: `UserController.changePassword()` 에서 `refreshSecurityContext()` 를 호출하여 현재 세션의 `AuthUser` 를 새 `tokenVersion` 으로 즉시 교체.
+
+### 13.3 인지하되 수용한 위험 (Medium / Low)
+
+| 위험 | 수용 근거 | 향후 대응 |
+|------|----------|----------|
+| 회원가입 이메일 존재 여부 노출 (409) | 일반적 UX 트레이드오프. Rate limiting 으로 대량 조회 억제 | 일반 응답으로 통일 (Phase 2) |
+| dev 프로필 cookie 에 secure 미설정 | localhost HTTP 환경 필수 | 기본값을 restrictive 로 설정하고 dev 에서만 완화 (향후) |
+| `PUT /api/user/{id}` 가 nickname + password 동시 수정 | 프로필 수정과 비밀번호 변경이 별도 엔드포인트(`/password`)로 이미 분리됨 | 기존 `/api/user/{id}` 에서 password 필드 제거 검토 |
+| CSP `style-src 'unsafe-inline'` | Tailwind / shadcn/ui 호환 필요 | nonce 기반 전환 (Phase 2) |
+| 자동 계정 잠금 없음 | Rate limiting 으로 1차 방어 | N회 실패 → 임시 잠금 (Phase 2) |
+| tokenVersion int overflow | 20억 회 비밀번호 변경 = 사실상 불가능 | long 전환 (필요 시) |
 
 ---
 
 ## 14. 결론
 
 > **본 프로젝트는 단일 웹 클라이언트 + 단일 백엔드 구조이므로, Session-based 인증이 가장 단순하고 안전하며 운영 비용이 낮다.
-> JWT 는 모바일/외부 통합/단기 1회용 토큰 등 명확한 목적이 있을 때 한정해서 도입한다.
-> 현재 구현은 Phase 0 을 충실히 만족하며, 다음 단계는 Rate limiting (Phase 1.1) 이 가장 시급하다.**
+> JWT 는 모바일/외부 통합/단기 1회용 토큰 등 명확한 목적이 있을 때 한정해서 도입한다.**
+>
+> **Phase 0 (기본 인증) + Phase 1 (보안 강화) 가 모두 완료**되었으며, 해커 관점 리뷰에서 발견된 Critical/High 취약점도 즉시 수정됨.
+> 다음 단계는 Phase 2 (Role 도입, 이메일 인증, 비밀번호 재설정).
 
 ---
 
