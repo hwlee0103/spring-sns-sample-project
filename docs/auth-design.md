@@ -9,27 +9,32 @@
 
 | 항목 | 구현 | 적용 일자 |
 |------|------|-----------|
-| 메커니즘 | Spring Security 6 + `HttpSessionSecurityContextRepository` | 04-11 |
+| 메커니즘 | Spring Security 6 + **Spring Session Redis** (`RedisIndexedSessionRepository`) | 04-13 |
 | 비밀번호 해싱 | Argon2id (`Argon2Password4jPasswordEncoder` — password4j 1.8.2) | 04-12 |
-| Principal | 커스텀 `AuthUser`(id/email/tokenVersion) — `UserDetailsServiceImpl` 가 로드 | 04-11 |
-| 세션 ID | `JSESSIONID` (서버 메모리 저장) | 04-11 |
+| Principal | 커스텀 `AuthUser`(id/email/nickname/tokenVersion, `Serializable`) — `UserDetailsServiceImpl` 가 로드 | 04-13 |
+| 세션 저장소 | **Redis** (`spring-boot-starter-session-data-redis`, namespace `sns`) | 04-13 |
+| 세션 레지스트리 | `SpringSessionBackedSessionRegistry` — 다중 인스턴스 세션 관리 | 04-13 |
+| 동시 세션 제어 | `maximumSessions(3)` + `CompositeSessionAuthenticationStrategy` — 초과 시 최오래 세션 만료 | 04-13 |
+| 세션 만료 | Sliding 30분 (`spring.session.timeout`) + Absolute 24시간 (`AbsoluteSessionTimeoutFilter`) | 04-13 |
 | 세션 고정 방어 | `ChangeSessionIdAuthenticationStrategy` — 로그인 시 세션 ID 재발급 | 04-11 |
 | CSRF | `CookieCsrfTokenRepository` + **`XorCsrfTokenRequestAttributeHandler`** (BREACH 완화) + `CsrfCookieFilter` | 04-12 |
-| 로그인 | `POST /api/auth/login` 수동 authenticate + 세션 저장 | 04-11 |
-| 비밀번호 변경 | `PUT /api/user/{id}/password` — 현재 비밀번호 재확인 + tokenVersion bump | 04-12 |
-| token version | `User.tokenVersion` + `AuthUser.tokenVersion` → `/api/auth/me` 에서 비교, 불일치 시 세션 무효화 | 04-12 |
-| 현재 사용자 | `GET /api/auth/me` (`@AuthenticationPrincipal AuthUser`) + tokenVersion 검증 | 04-11 |
+| 로그인 | `POST /api/auth/login` — `RestAuthenticationFilter` (JSON body, `MediaType` 호환 검증) | 04-13 |
+| 비밀번호 변경 | `PUT /api/user/{id}/password` — 현재 비밀번호 재확인 + `User.changePassword()` (tokenVersion 자동 증가) + Redis 세션 즉시 삭제 | 04-13 |
+| 프로필 수정 | `PUT /api/user/{id}` — **nickname만 변경** (password 필드 제거, 비밀번호 변경 백도어 차단) | 04-13 |
+| token version | `User.tokenVersion` + `AuthUser.tokenVersion` → `/api/auth/me` 에서 비교, 불일치 시 세션 무효화 + Redis 즉시 삭제 (fallback) | 04-13 |
+| 현재 사용자 | `GET /api/auth/me` (`@AuthenticationPrincipal AuthUser`) + null 방어 + tokenVersion 검증 | 04-13 |
 | 로그아웃 | `POST /api/auth/logout` (Spring Security `logout()` DSL) | 04-11 |
 | 인가 (IDOR 방어) | `requireOwnership(authUser, id)` — PUT/DELETE /api/user/{id} 본인 검증 | 04-13 |
-| Rate limiting | `RateLimitFilter` (Bucket4j) — IP 기반 분당 20회, XFF 불신 | 04-12 |
-| Audit log | `AuthEventListener` — 로그인 성공/실패/로그아웃 이벤트 감사 로깅 | 04-12 |
-| 운영 cookie | `application-prod.yaml` — secure, http-only, same-site lax, timeout 30m | 04-12 |
+| Rate limiting | `RateLimitFilter` (Bucket4j + **Caffeine 캐시**) — IP 기반 분당 20회, XFF 불신, 개별 eviction | 04-13 |
+| Audit log | `AuthEventListener` — 로그인 성공/실패/로그아웃 + **세션 생성/삭제/만료** 이벤트 감사 로깅 (세션 ID 축약) | 04-13 |
+| 운영 cookie | `application-prod.yaml` — secure, http-only, same-site lax | 04-12 |
 | HTTPS 강제 | `SecurityConfig` — prod 프로필에서만 `requiresChannel().requiresSecure()` | 04-12 |
 | CSP 헤더 | `Content-Security-Policy: default-src 'self'; script-src 'self'` | 04-12 |
 | H2 콘솔 제한 | `SecurityConfig` — dev 프로필에서만 접근 허용 (`AuthorizationDecision`) | 04-13 |
 | 프론트 ↔ 백 | Next.js rewrites 로 same-origin 프록시, 쿠키 + XSRF-TOKEN 자동 첨부 | 04-11 |
 | 인증 예외 | `unauthorizedEntryPoint` 가 401 통일 + `AuthenticationException` 전체 catch | 04-11 |
 | 타이밍 공격 방어 | `UserDetailsServiceImpl` 가 더미 hash `passwordEncoder.matches` 호출 | 04-11 |
+| 설정 외부화 | `AppSessionProperties`, `RateLimitProperties` — `@ConfigurationProperties` record | 04-13 |
 
 ---
 
@@ -507,13 +512,19 @@ server:
 7. ✅ **XorCsrfTokenRequestAttributeHandler** — BREACH 압축 공격 완화
 8. ✅ **Content-Security-Policy** — `default-src 'self'; script-src 'self'`
 
-### Phase 1.5 — Redis 세션 관리 (현재 진행)
-1. **Spring Session + Redis** — 세션 외부화 (`spring-boot-starter-session-data-redis`)
-2. **`RedisIndexedSessionRepository`** — principal 기반 세션 인덱스 (동시 세션 제어 + 일괄 무효화)
-3. **`SpringSessionBackedSessionRegistry`** — 다중 인스턴스 세션 레지스트리
-4. **`maximumSessions(3)`** — 사용자당 동시 세션 3개 (스마트폰/PC/태블릿)
-5. **Sliding Session (30분)** — idle timeout + absolute timeout (24시간) 보조
-6. **비밀번호 변경 시 즉시 세션 삭제** — `findByPrincipalName()` → 현재 세션 제외 일괄 삭제
+### Phase 1.5 — Redis 세션 관리 + 보안 강화 ✅ (2026-04-13 완료)
+1. ✅ **Spring Session + Redis** — 세션 외부화 (`spring-boot-starter-session-data-redis`)
+2. ✅ **`RedisIndexedSessionRepository`** — principal 기반 세션 인덱스 (`repository-type=indexed`)
+3. ✅ **`SpringSessionBackedSessionRegistry`** — 다중 인스턴스 세션 레지스트리 (`SessionConfig`)
+4. ✅ **`maximumSessions(3)`** — `CompositeSessionAuthenticationStrategy` + `ConcurrentSessionFilter`
+5. ✅ **Sliding Session (30분)** — `spring.session.timeout=30m` + `AbsoluteSessionTimeoutFilter` (24시간)
+6. ✅ **비밀번호 변경 시 즉시 세션 삭제** — `findByPrincipalName()` → 현재 세션 제외 일괄 삭제
+7. ✅ **프로필 수정/비밀번호 변경 분리** — `UserUpdateRequest` 에서 password 제거, 백도어 차단
+8. ✅ **Post fetch join** — `LazyInitializationException` 해결 + N+1 쿼리 제거
+9. ✅ **RateLimitFilter Caffeine 캐시** — 전체 clear → 개별 eviction, dead code 정리
+10. ✅ **설정값 외부화** — `AppSessionProperties`, `RateLimitProperties` (`@ConfigurationProperties`)
+11. ✅ **AuthUser Serializable** — Redis 직렬화 지원
+12. ✅ **세션 이벤트 감사 로그** — `SessionCreated/Deleted/ExpiredEvent` (세션 ID 축약)
 
 > 상세 설계: [§12. Redis 세션 관리 설계](#12-redis-세션-관리-설계)
 
@@ -1008,10 +1019,67 @@ private static void requireOwnership(AuthUser authUser, Long targetId) {
 |------|----------|----------|
 | 회원가입 이메일 존재 여부 노출 (409) | 일반적 UX 트레이드오프. Rate limiting 으로 대량 조회 억제 | 일반 응답으로 통일 (Phase 2) |
 | dev 프로필 cookie 에 secure 미설정 | localhost HTTP 환경 필수 | 기본값을 restrictive 로 설정하고 dev 에서만 완화 (향후) |
-| `PUT /api/user/{id}` 가 nickname + password 동시 수정 | 프로필 수정과 비밀번호 변경이 별도 엔드포인트(`/password`)로 이미 분리됨 | 기존 `/api/user/{id}` 에서 password 필드 제거 검토 |
+| `PUT /api/user/{id}` 프로필 수정 | ~~password 필드 제거 완료 (04-13)~~ — nickname 만 변경. 비밀번호는 전용 `/password` 엔드포인트만 허용 | **해결됨** |
 | CSP `style-src 'unsafe-inline'` | Tailwind / shadcn/ui 호환 필요 | nonce 기반 전환 (Phase 2) |
 | 자동 계정 잠금 없음 | Rate limiting 으로 1차 방어 | N회 실패 → 임시 잠금 (Phase 2) |
 | tokenVersion int overflow | 20억 회 비밀번호 변경 = 사실상 불가능 | long 전환 (필요 시) |
+
+### 14.2 Phase 1.5 구현 상세 (2026-04-13)
+
+#### Redis 세션 관리 인프라
+
+- **의존성**: `spring-boot-starter-session-data-redis` + `com.github.ben-manes.caffeine:caffeine`
+- **활성화**: `spring.session.redis.repository-type=indexed` (Boot auto-config, `@Enable*` 어노테이션 미사용)
+- **`SessionConfig`**: `@ConditionalOnBean(FindByIndexNameSessionRepository.class)` — Redis 없는 테스트 환경에서 자동 비활성화
+- **`SpringSessionBackedSessionRegistry`**: `FindByIndexNameSessionRepository` → Spring Security 동시 세션 제어 연결
+- **`CompositeSessionAuthenticationStrategy`**: 커스텀 `RestAuthenticationFilter` 용 — (1) `ConcurrentSessionControlAuthenticationStrategy` → (2) `ChangeSessionIdAuthenticationStrategy` → (3) `RegisterSessionAuthenticationStrategy`
+- **`AbsoluteSessionTimeoutFilter`**: `session.getCreationTime()` fallback으로 배포 전 기존 세션도 처리. `Duration` 은 `AppSessionProperties` 에서 주입
+
+#### 비밀번호 변경 시 다른 세션 즉시 삭제
+
+```
+[비밀번호 변경 흐름 — 04-13 최종]
+UserController.changePassword()
+  → UserService.changePassword()
+    → validateRawPassword(currentRawPassword)  ← #89 추가
+    → validateRawPassword(newRawPassword)
+    → passwordEncoder.matches(current, stored)
+    → user.changePassword(encode(new))         ← tokenVersion 자동 증가
+  → refreshSecurityContext(updatedUser)         ← 현재 세션 AuthUser 갱신
+  → invalidateOtherSessions(email, sessionId)  ← Redis findByPrincipalName → 일괄 삭제
+```
+
+기존 tokenVersion 폴링 방식(최대 5분 지연) → Redis 즉시 삭제(0초). tokenVersion 은 fallback 안전장치로 유지.
+
+#### 프로필 수정 / 비밀번호 변경 분리 (Critical #94 수정)
+
+- **수정 전**: `PUT /api/user/{id}` 가 `UserUpdateRequest(nickname, password)` 를 받아 현재 비밀번호 확인 없이 교체 가능 → 세션 탈취 시 계정 탈취
+- **수정 후**: `UserUpdateRequest(nickname)` 만 허용. `UserUpdateCommand` 삭제. `User.update()` → `updateNickname()` + `changePassword()` 분리. 비밀번호 변경은 전용 `PUT /api/user/{id}/password` 만 허용 (현재 비밀번호 재확인 + tokenVersion 자동 증가)
+
+#### Post fetch join (Critical #81 수정)
+
+- **수정 전**: `PostService.create()` 가 `getReferenceById()` → lazy proxy. Controller 에서 `PostResponse.from(post.getAuthor())` 시 `LazyInitializationException`
+- **수정 후**: `findById()` 로 author 즉시 로드. `PostRepository` 에 `findWithAuthorById()` + `findAllWithAuthor()` fetch join 쿼리 추가. N+1 쿼리 문제도 동시 해결
+
+#### RateLimitFilter Caffeine 캐시 교체 (Critical #82, Warning #90 수정)
+
+- **수정 전**: `ConcurrentHashMap` + `emailBuckets` dead code + 10,000 초과 시 `ipBuckets.clear()` (전체 리셋 공격 가능)
+- **수정 후**: dead code 제거. `Caffeine` 캐시 (`maximumSize` + `expireAfterAccess(10분)`) 로 개별 엔트리 자동 eviction. `RateLimitProperties` 로 설정값 외부화
+
+#### 설정값 외부화 (Warning #86 #87 #88 수정)
+
+| 설정 | 프로퍼티 키 | 기본값 | 적용 대상 |
+|------|------------|--------|----------|
+| 동시 세션 수 | `app.session.max-sessions-per-user` | 3 | `SecurityConfig`, `CompositeSessionAuthenticationStrategy` |
+| 절대 세션 만료 | `app.session.absolute-timeout` | 24h | `AbsoluteSessionTimeoutFilter` |
+| IP 분당 요청 수 | `app.rate-limit.ip-requests-per-minute` | 20 | `RateLimitFilter` |
+| 최대 버킷 수 | `app.rate-limit.max-buckets` | 10000 | `RateLimitFilter` (Caffeine `maximumSize`) |
+
+#### 기타 보안 개선 (Warning #83 #85 수정)
+
+- `AuthController.me()`: `authUser == null` 방어적 체크 추가 — SecurityConfig 설정 변경 시 NPE 방지
+- `RestAuthenticationFilter`: Content-Type 비교를 `equalsIgnoreCase` → `MediaType.parseMediaType().isCompatibleWith()` 로 교체 — `application/json; charset=utf-8` 등 변형 허용
+- `AuthEventListener`: 세션 이벤트(`SessionCreated/Deleted/ExpiredEvent`) 감사 로그 추가, 세션 ID 앞 8자만 기록 (로그 유출 시 하이재킹 방지)
 
 ---
 
@@ -1020,9 +1088,9 @@ private static void requireOwnership(AuthUser authUser, Long targetId) {
 > **본 프로젝트는 단일 웹 클라이언트 + 단일 백엔드 구조이므로, Session-based 인증이 가장 단순하고 안전하며 운영 비용이 낮다.
 > JWT 는 모바일/외부 통합/단기 1회용 토큰 등 명확한 목적이 있을 때 한정해서 도입한다.**
 >
-> **Phase 0 (기본 인증) + Phase 1 (보안 강화) 가 모두 완료**되었으며, 해커 관점 리뷰에서 발견된 Critical/High 취약점도 즉시 수정됨.
-> **Phase 1.5 (Redis 세션 관리)** 설계 완료 — `RedisIndexedSessionRepository` + `SpringSessionBackedSessionRegistry` 로 중앙 집중식 세션 관리, 동시 세션 제어(3개), Sliding Session(30분) 도입 예정.
-> 다음 단계는 Phase 1.5 구현 후 Phase 2 (Role 도입, 이메일 인증, 비밀번호 재설정).
+> **Phase 0 (기본 인증) + Phase 1 (보안 강화) + Phase 1.5 (Redis 세션 관리 + 보안 취약점 수정) 모두 완료.**
+> 해커 관점 리뷰 2회에서 발견된 Critical 3건 + High 3건 + Warning 6건을 즉시 수정함.
+> 다음 단계는 Phase 2 (Role 도입, 이메일 인증, 비밀번호 재설정).
 
 ---
 
