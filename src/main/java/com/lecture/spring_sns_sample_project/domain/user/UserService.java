@@ -18,8 +18,8 @@ public class UserService {
   /**
    * 회원가입.
    *
-   * <p>raw 입력값을 검증한 뒤 비밀번호를 인코딩하여 Entity 를 생성한다. {@code register} 와 {@link #update} 모두 동일하게 Service
-   * 가 인코딩을 책임진다 (Entity 는 PasswordEncoder 에 의존하지 않음).
+   * <p>raw 입력값을 검증한 뒤 비밀번호를 인코딩하여 Entity 를 생성한다. Service 가 인코딩을 책임진다 (Entity 는 PasswordEncoder 에
+   * 의존하지 않음).
    */
   public User register(String email, String rawPassword, String nickname) {
     validateEmail(email);
@@ -49,33 +49,39 @@ public class UserService {
         .orElseThrow(() -> UserException.notFoundByEmail(email));
   }
 
+  public User getByNickname(String nickname) {
+    return userRepository
+        .findByNickname(nickname)
+        .orElseThrow(() -> UserException.notFoundByNickname(nickname));
+  }
+
   public Page<User> getAll(Pageable pageable) {
     return userRepository.findAll(pageable);
   }
 
+  /** 프로필 수정 — nickname 만 변경. 비밀번호는 전용 {@link #changePassword} 엔드포인트에서만 변경 가능. */
   @Transactional
-  public User update(Long id, UserUpdateCommand command) {
-    validateNickname(command.nickname());
-    validateRawPassword(command.rawPassword());
+  public User update(Long id, String nickname) {
+    validateNickname(nickname);
     User user = userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
-    user.update(command.nickname(), passwordEncoder.encode(command.rawPassword()));
+    user.updateNickname(nickname);
     return user;
   }
 
   /**
    * 비밀번호 변경 — 현재 비밀번호 재확인 후 새 비밀번호로 교체.
    *
-   * <p>tokenVersion 을 증가시켜 다른 디바이스의 세션을 자동 무효화한다.
+   * <p>{@code User.changePassword()} 가 tokenVersion 을 자동 증가시켜 다른 디바이스의 세션을 무효화한다.
    */
   @Transactional
   public User changePassword(Long id, String currentRawPassword, String newRawPassword) {
+    validateRawPassword(currentRawPassword);
     validateRawPassword(newRawPassword);
     User user = userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
     if (!passwordEncoder.matches(currentRawPassword, user.getPassword())) {
       throw UserException.invalidCredentials();
     }
-    user.update(user.getNickname(), passwordEncoder.encode(newRawPassword));
-    user.bumpTokenVersion();
+    user.changePassword(passwordEncoder.encode(newRawPassword));
     return user;
   }
 

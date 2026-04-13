@@ -16,18 +16,18 @@ public class PostService {
   private final UserRepository userRepository;
 
   public Post create(Long authorId, String content) {
-    // FK 만 채우면 되므로 SELECT 없이 reference proxy 사용 → mutation 당 1 DB 왕복 절감
-    User authorRef = userRepository.getReferenceById(authorId);
-    Post post = new Post(authorRef, content);
+    User author =
+        userRepository.findById(authorId).orElseThrow(() -> PostException.invalidField("author"));
+    Post post = new Post(author, content);
     return postRepository.save(post);
   }
 
   public Page<Post> getFeed(Pageable pageable) {
-    return postRepository.findAll(pageable);
+    return postRepository.findAllWithAuthor(pageable);
   }
 
   public Post getById(Long id) {
-    return postRepository.findById(id).orElseThrow(() -> PostException.notFound(id));
+    return postRepository.findWithAuthorById(id).orElseThrow(() -> PostException.notFound(id));
   }
 
   @Transactional

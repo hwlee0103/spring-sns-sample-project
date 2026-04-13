@@ -3,3 +3,16 @@ spring:
     name: spring-sns-sample-project
   profiles:
     active: dev
+  session:
+    store-type: redis
+    timeout: 30m
+    redis:
+      repository-type: indexed
+      namespace: sns
+app:
+  session:
+    max-sessions-per-user: 3
+    absolute-timeout: 24h
+  rate-limit:
+    ip-requests-per-minute: 20
+    max-buckets: 10000

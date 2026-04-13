@@ -13,7 +13,8 @@
 | Language | Java 26 | record, sealed class 활용 |
 | Build | Gradle (Kotlin DSL) | Spotless 자동 포맷 |
 | Persistence | JPA / Hibernate | H2 (dev), PostgreSQL (prod) |
-| Auth | Spring Security 6 | HttpSession 기반 쿠키 |
+| Auth | Spring Security 6 | HttpSession + Spring Session Redis |
+| Session | Spring Session + Redis | `RedisIndexedSessionRepository`, Sliding 30분 |
 | Password | Argon2 | `spring-security-crypto` |
 | Validation | Bean Validation (Jakarta) | `@Valid` + Hibernate Validator |
 | 테스트 | JUnit 5 | shell 기반 통합 테스트 (`src/main/resources/http/`) |
@@ -172,10 +173,12 @@ com.lecture.spring_sns_sample_project
 
 ## 6. 인증 / 세션
 
-- **메커니즘**: HttpSession (서버측 메모리, 추후 Redis 로 외부화 가능).
-- **쿠키**: `JSESSIONID` (Spring Security 기본). HttpOnly, Secure(prod), SameSite=Lax.
-- **CSRF**: 학습 프로젝트 단순화를 위해 비활성화. 실서비스 시 CSRF 토큰 또는 더블 서밋 쿠키 패턴 도입 필요.
-- **저장**: `HttpSessionSecurityContextRepository` 가 SecurityContext 를 세션에 저장.
+- **메커니즘**: HttpSession + **Spring Session Redis** (`RedisIndexedSessionRepository`). 중앙 집중식 세션 저장.
+- **쿠키**: `SESSION` (Spring Session 기본). HttpOnly, Secure(prod), SameSite=Lax.
+- **CSRF**: `CookieCsrfTokenRepository` + `XorCsrfTokenRequestAttributeHandler` (BREACH 완화).
+- **동시 세션**: `SpringSessionBackedSessionRegistry` — 사용자당 최대 3개, 초과 시 가장 오래된 세션 만료.
+- **세션 만료**: Sliding Session 30분 (idle) + Absolute 24시간.
+- **저장**: `HttpSessionSecurityContextRepository` 가 SecurityContext 를 세션에 저장. Redis 가 백엔드 저장소.
 - **인가 매트릭스**:
   - `POST /api/user`, `/api/auth/login`, `/api/auth/me`: 공개
   - `GET /api/user`, `GET /api/user/*`, `GET /api/post`, `GET /api/post/*`: 공개 (브라우징)

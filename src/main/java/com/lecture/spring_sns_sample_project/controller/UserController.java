@@ -22,6 +22,8 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.context.SecurityContextRepository;
+import org.springframework.session.FindByIndexNameSessionRepository;
+import org.springframework.session.Session;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -36,6 +38,7 @@ public class UserController {
 
   private final UserService userService;
   private final SecurityContextRepository securityContextRepository;
+  private final FindByIndexNameSessionRepository<? extends Session> sessionRepository;
 
   @PostMapping("/api/user")
   public ResponseEntity<UserResponse> register(@Valid @RequestBody UserCreateRequest request) {
@@ -47,6 +50,12 @@ public class UserController {
   @GetMapping("/api/user/{id}")
   public ResponseEntity<UserResponse> getUser(@PathVariable Long id) {
     User user = userService.getById(id);
+    return ResponseEntity.ok(UserResponse.from(user));
+  }
+
+  @GetMapping("/api/user/by-nickname/{nickname}")
+  public ResponseEntity<UserResponse> getUserByNickname(@PathVariable String nickname) {
+    User user = userService.getByNickname(nickname);
     return ResponseEntity.ok(UserResponse.from(user));
   }
 
@@ -64,7 +73,7 @@ public class UserController {
       @Valid @RequestBody UserUpdateRequest request,
       @AuthenticationPrincipal AuthUser authUser) {
     requireOwnership(authUser, id);
-    User user = userService.update(id, request.toCommand());
+    User user = userService.update(id, request.nickname());
     return ResponseEntity.ok(UserResponse.from(user));
   }
 
@@ -78,8 +87,13 @@ public class UserController {
     requireOwnership(authUser, id);
     User updatedUser =
         userService.changePassword(id, request.currentPassword(), request.newPassword());
+
     // 현재 세션의 AuthUser 를 새 tokenVersion 으로 갱신 — 본인 세션이 즉시 무효화되지 않도록
     refreshSecurityContext(updatedUser, httpRequest, httpResponse);
+
+    // Redis 에서 해당 사용자의 다른 디바이스 세션을 즉시 삭제
+    invalidateOtherSessions(authUser.getEmail(), httpRequest.getSession().getId());
+
     return ResponseEntity.noContent().build();
   }
 
@@ -97,6 +111,18 @@ public class UserController {
       throw new org.springframework.security.access.AccessDeniedException(
           "본인의 리소스만 수정/삭제할 수 있습니다.");
     }
+  }
+
+  /** 비밀번호 변경 시 현재 세션을 제외한 해당 사용자의 모든 세션을 Redis 에서 즉시 삭제. */
+  private void invalidateOtherSessions(String email, String currentSessionId) {
+    sessionRepository
+        .findByPrincipalName(email)
+        .forEach(
+            (sessionId, session) -> {
+              if (!sessionId.equals(currentSessionId)) {
+                sessionRepository.deleteById(sessionId);
+              }
+            });
   }
 
   /** 비밀번호 변경 후 현재 세션의 AuthUser 를 새 tokenVersion 으로 갱신. */

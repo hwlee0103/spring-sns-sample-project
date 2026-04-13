@@ -28,7 +28,7 @@ public class User {
   @Column(nullable = false)
   private String password;
 
-  @Column(nullable = false)
+  @Column(nullable = false, unique = true)
   private String nickname;
 
   /** 비밀번호 변경/계정 정지 시 증가시켜, 이전 세션들이 다음 요청에서 무효화되도록 한다. 세션에 저장된 tokenVersion 과 비교하여 불일치 시 401. */
@@ -57,23 +57,24 @@ public class User {
     this.nickname = nickname;
   }
 
-  /**
-   * @param nickname 검증된 닉네임
-   * @param encodedPassword 이미 인코딩된 비밀번호 (원문 금지)
-   */
-  public void update(String nickname, String encodedPassword) {
+  /** 프로필 수정 — nickname 만 변경. 비밀번호 변경은 {@link #changePassword(String)} 전용. */
+  public void updateNickname(String nickname) {
     if (nickname == null || nickname.isBlank()) {
       throw UserException.invalidField("nickname");
     }
+    this.nickname = nickname;
+  }
+
+  /**
+   * 비밀번호 변경 — 인코딩된 비밀번호로 교체 + tokenVersion 자동 증가.
+   *
+   * @param encodedPassword 이미 인코딩된 비밀번호 (원문 금지)
+   */
+  public void changePassword(String encodedPassword) {
     if (encodedPassword == null || encodedPassword.isBlank()) {
       throw UserException.invalidField("password");
     }
-    this.nickname = nickname;
     this.password = encodedPassword;
-  }
-
-  /** 비밀번호 변경/계정 정지 시 호출 — 기존 세션의 tokenVersion 과 불일치시켜 자동 무효화. */
-  public void bumpTokenVersion() {
     this.tokenVersion++;
   }
 }

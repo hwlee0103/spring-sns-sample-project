@@ -1,0 +1,7 @@
+spring:
+  application:
+    name: spring-sns-sample-project
+  profiles:
+    active: dev
+  session:
+    store-type: none

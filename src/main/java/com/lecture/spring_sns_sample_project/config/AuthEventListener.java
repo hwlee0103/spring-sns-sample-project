@@ -6,6 +6,9 @@ import org.springframework.context.event.EventListener;
 import org.springframework.security.authentication.event.AbstractAuthenticationFailureEvent;
 import org.springframework.security.authentication.event.AuthenticationSuccessEvent;
 import org.springframework.security.authentication.event.LogoutSuccessEvent;
+import org.springframework.session.events.SessionCreatedEvent;
+import org.springframework.session.events.SessionDeletedEvent;
+import org.springframework.session.events.SessionExpiredEvent;
 import org.springframework.stereotype.Component;
 
 /**
@@ -36,5 +39,28 @@ public class AuthEventListener {
     String username =
         event.getAuthentication() != null ? event.getAuthentication().getName() : "unknown";
     audit.info("LOGOUT user={}", username);
+  }
+
+  @EventListener
+  public void onSessionCreated(SessionCreatedEvent event) {
+    audit.info("SESSION_CREATED sessionId={}", truncateSessionId(event.getSessionId()));
+  }
+
+  @EventListener
+  public void onSessionDeleted(SessionDeletedEvent event) {
+    audit.info("SESSION_DELETED sessionId={}", truncateSessionId(event.getSessionId()));
+  }
+
+  @EventListener
+  public void onSessionExpired(SessionExpiredEvent event) {
+    audit.info("SESSION_EXPIRED sessionId={}", truncateSessionId(event.getSessionId()));
+  }
+
+  /** 세션 ID 전체 노출은 로그 유출 시 세션 하이재킹 벡터가 된다. 앞 8자만 기록. */
+  private static String truncateSessionId(String sessionId) {
+    if (sessionId == null || sessionId.length() <= 8) {
+      return sessionId;
+    }
+    return sessionId.substring(0, 8) + "...";
   }
 }
