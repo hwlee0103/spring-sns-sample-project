@@ -1,5 +1,6 @@
 package com.lecture.spring_sns_sample_project.domain.user.security;
 
+import com.lecture.spring_sns_sample_project.domain.user.Role;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import java.io.Serial;
 import java.io.Serializable;
@@ -7,6 +8,7 @@ import java.util.Collection;
 import java.util.List;
 import lombok.Getter;
 import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
 /**
@@ -26,13 +28,16 @@ public class AuthUser implements UserDetails, Serializable {
   private final String email;
   private final String nickname;
   private final String password;
+  private final Role role;
   private final int tokenVersion;
 
-  public AuthUser(Long id, String email, String nickname, String password, int tokenVersion) {
+  public AuthUser(
+      Long id, String email, String nickname, String password, Role role, int tokenVersion) {
     this.id = id;
     this.email = email;
     this.nickname = nickname;
     this.password = password;
+    this.role = role;
     this.tokenVersion = tokenVersion;
   }
 
@@ -42,12 +47,17 @@ public class AuthUser implements UserDetails, Serializable {
         user.getEmail(),
         user.getNickname(),
         user.getPassword(),
+        user.getRole(),
         user.getTokenVersion());
   }
 
   @Override
   public Collection<? extends GrantedAuthority> getAuthorities() {
-    return List.of();
+    if (role == Role.ADMIN) {
+      return List.of(
+          new SimpleGrantedAuthority("ROLE_USER"), new SimpleGrantedAuthority("ROLE_ADMIN"));
+    }
+    return List.of(new SimpleGrantedAuthority("ROLE_USER"));
   }
 
   @Override

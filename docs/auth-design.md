@@ -35,6 +35,7 @@
 | 인증 예외 | `unauthorizedEntryPoint` 가 401 통일 + `AuthenticationException` 전체 catch | 04-11 |
 | 타이밍 공격 방어 | `UserDetailsServiceImpl` 가 더미 hash `passwordEncoder.matches` 호출 | 04-11 |
 | 설정 외부화 | `AppSessionProperties`, `RateLimitProperties` — `@ConfigurationProperties` record | 04-13 |
+| Role 기반 인가 | `Role` enum (`USER`, `ADMIN`) + `AuthUser.getAuthorities()` + `@EnableMethodSecurity` + `/api/admin/**` hasRole | 04-13 |
 
 ---
 
@@ -529,7 +530,7 @@ server:
 > 상세 설계: [§12. Redis 세션 관리 설계](#12-redis-세션-관리-설계)
 
 ### Phase 2 — SNS 기능 확장 시
-1. **Role 도입** — User/Admin
+1. ✅ **Role 도입** — `Role` enum (`USER`/`ADMIN`) + `@EnableMethodSecurity` + `/api/admin/**` hasRole (2026-04-13)
 2. **이메일 인증 흐름** (단기 JWT 1회용)
 3. **비밀번호 재설정 흐름** (단기 JWT 1회용)
 4. **계정 정지 / 복원** (Admin)
