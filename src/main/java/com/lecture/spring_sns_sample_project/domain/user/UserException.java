@@ -26,6 +26,10 @@ public class UserException extends DomainException {
     return new UserException(ErrorType.NOT_FOUND, "존재하지 않는 사용자입니다: " + email);
   }
 
+  public static UserException notFoundByNickname(String nickname) {
+    return new UserException(ErrorType.NOT_FOUND, "존재하지 않는 사용자입니다: " + nickname);
+  }
+
   public static UserException invalidField(String fieldName) {
     return new UserException(ErrorType.BAD_REQUEST, fieldName + " 값이 비어 있을 수 없습니다.");
   }

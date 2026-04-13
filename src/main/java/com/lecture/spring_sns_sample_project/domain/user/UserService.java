@@ -49,6 +49,12 @@ public class UserService {
         .orElseThrow(() -> UserException.notFoundByEmail(email));
   }
 
+  public User getByNickname(String nickname) {
+    return userRepository
+        .findByNickname(nickname)
+        .orElseThrow(() -> UserException.notFoundByNickname(nickname));
+  }
+
   public Page<User> getAll(Pageable pageable) {
     return userRepository.findAll(pageable);
   }

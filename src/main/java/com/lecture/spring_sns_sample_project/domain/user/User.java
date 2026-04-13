@@ -28,7 +28,7 @@ public class User {
   @Column(nullable = false)
   private String password;
 
-  @Column(nullable = false)
+  @Column(nullable = false, unique = true)
   private String nickname;
 
   /** 비밀번호 변경/계정 정지 시 증가시켜, 이전 세션들이 다음 요청에서 무효화되도록 한다. 세션에 저장된 tokenVersion 과 비교하여 불일치 시 401. */
