@@ -73,7 +73,7 @@ public class UserController {
       @Valid @RequestBody UserUpdateRequest request,
       @AuthenticationPrincipal AuthUser authUser) {
     requireOwnership(authUser, id);
-    User user = userService.update(id, request.toCommand());
+    User user = userService.update(id, request.nickname());
     return ResponseEntity.ok(UserResponse.from(user));
   }
 
