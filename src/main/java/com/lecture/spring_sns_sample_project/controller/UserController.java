@@ -4,6 +4,7 @@ import com.lecture.spring_sns_sample_project.controller.dto.ChangePasswordReques
 import com.lecture.spring_sns_sample_project.controller.dto.PageResponse;
 import com.lecture.spring_sns_sample_project.controller.dto.UserCreateRequest;
 import com.lecture.spring_sns_sample_project.controller.dto.UserResponse;
+import com.lecture.spring_sns_sample_project.controller.dto.UserSummaryResponse;
 import com.lecture.spring_sns_sample_project.controller.dto.UserUpdateRequest;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserService;
@@ -48,22 +49,22 @@ public class UserController {
   }
 
   @GetMapping("/api/user/{id}")
-  public ResponseEntity<UserResponse> getUser(@PathVariable Long id) {
+  public ResponseEntity<UserSummaryResponse> getUser(@PathVariable Long id) {
     User user = userService.getById(id);
-    return ResponseEntity.ok(UserResponse.from(user));
+    return ResponseEntity.ok(UserSummaryResponse.from(user));
   }
 
   @GetMapping("/api/user/by-nickname/{nickname}")
-  public ResponseEntity<UserResponse> getUserByNickname(@PathVariable String nickname) {
+  public ResponseEntity<UserSummaryResponse> getUserByNickname(@PathVariable String nickname) {
     User user = userService.getByNickname(nickname);
-    return ResponseEntity.ok(UserResponse.from(user));
+    return ResponseEntity.ok(UserSummaryResponse.from(user));
   }
 
   @GetMapping("/api/user")
-  public ResponseEntity<PageResponse<UserResponse>> getUsers(
+  public ResponseEntity<PageResponse<UserSummaryResponse>> getUsers(
       @PageableDefault(size = 20, sort = "id", direction = Sort.Direction.DESC) Pageable pageable) {
-    PageResponse<UserResponse> response =
-        PageResponse.from(userService.getAll(pageable), UserResponse::from);
+    PageResponse<UserSummaryResponse> response =
+        PageResponse.from(userService.getAll(pageable), UserSummaryResponse::from);
     return ResponseEntity.ok(response);
   }
 
