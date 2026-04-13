@@ -28,6 +28,7 @@ dependencies {
     implementation("org.springframework.security:spring-security-crypto")
     implementation("com.password4j:password4j:1.8.2")
     implementation("com.bucket4j:bucket4j_jdk17-core:8.14.0")
+    implementation("com.github.ben-manes.caffeine:caffeine")
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")
     runtimeOnly("com.h2database:h2")
