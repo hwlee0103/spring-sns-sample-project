@@ -5,6 +5,7 @@ import com.lecture.spring_sns_sample_project.config.security.RestAuthSuccessHand
 import com.lecture.spring_sns_sample_project.config.security.RestAuthenticationFilter;
 import jakarta.servlet.http.HttpServletResponse;
 import java.util.Arrays;
+import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
@@ -15,20 +16,33 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.session.SessionRegistry;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.session.ChangeSessionIdAuthenticationStrategy;
+import org.springframework.security.web.authentication.session.CompositeSessionAuthenticationStrategy;
+import org.springframework.security.web.authentication.session.ConcurrentSessionControlAuthenticationStrategy;
+import org.springframework.security.web.authentication.session.RegisterSessionAuthenticationStrategy;
 import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.XorCsrfTokenRequestAttributeHandler;
+import org.springframework.security.web.session.ConcurrentSessionFilter;
 import tools.jackson.databind.ObjectMapper;
 
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
+
+  static final int MAX_SESSIONS_PER_USER = 3;
+
+  private final SessionRegistry sessionRegistry;
+
+  public SecurityConfig(SessionRegistry sessionRegistry) {
+    this.sessionRegistry = sessionRegistry;
+  }
 
   @Bean
   public SecurityFilterChain securityFilterChain(
@@ -56,10 +70,25 @@ public class SecurityConfig {
                     .ignoringRequestMatchers("/h2-console/**"))
         .addFilterAfter(csrfCookieFilter(), UsernamePasswordAuthenticationFilter.class)
         .addFilterBefore(rateLimitFilter(), UsernamePasswordAuthenticationFilter.class)
+        .addFilterAfter(absoluteSessionTimeoutFilter(), ConcurrentSessionFilter.class)
         // formLogin 대신 커스텀 JSON 인증 필터 등록
         .addFilterAt(loginFilter, UsernamePasswordAuthenticationFilter.class)
         .sessionManagement(
-            session -> session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
+            session ->
+                session
+                    .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
+                    // sessionFixation 은 표준 필터 전용. 커스텀 RestAuthenticationFilter 는
+                    // CompositeSessionAuthenticationStrategy 에서 별도 처리한다.
+                    .sessionFixation(fix -> fix.changeSessionId())
+                    .maximumSessions(MAX_SESSIONS_PER_USER)
+                    .sessionRegistry(sessionRegistry)
+                    .expiredSessionStrategy(
+                        event -> {
+                          var response = event.getResponse();
+                          response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                          response.setContentType("application/json;charset=UTF-8");
+                          response.getWriter().write("{\"message\":\"세션이 만료되었습니다.\"}");
+                        }))
         .authorizeHttpRequests(
             auth ->
                 auth.requestMatchers(HttpMethod.POST, "/api/user")
@@ -142,6 +171,11 @@ public class SecurityConfig {
   }
 
   @Bean
+  public AbsoluteSessionTimeoutFilter absoluteSessionTimeoutFilter() {
+    return new AbsoluteSessionTimeoutFilter();
+  }
+
+  @Bean
   public SecurityContextRepository securityContextRepository() {
     return new HttpSessionSecurityContextRepository();
   }
@@ -151,10 +185,33 @@ public class SecurityConfig {
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
   }
 
-  /** 세션 고정 공격 방어 — 인증 성공 시 세션 ID 를 새로 발급. */
+  /**
+   * 커스텀 REST 인증 필터용 세션 전략.
+   *
+   * <p>Spring Security DSL 의 {@code sessionManagement} 는 {@code
+   * UsernamePasswordAuthenticationFilter} 등 표준 필터에만 자동 적용된다. 커스텀 {@link RestAuthenticationFilter}
+   * 에는 이 복합 전략을 수동 설정해야 동시 세션 제어가 로그인 시점에 정상 작동한다.
+   *
+   * <ol>
+   *   <li>{@link ConcurrentSessionControlAuthenticationStrategy} — 동시 세션 수(3) 초과 검사
+   *   <li>{@link ChangeSessionIdAuthenticationStrategy} — 세션 고정 공격 방어
+   *   <li>{@link RegisterSessionAuthenticationStrategy} — 새 세션을 레지스트리에 등록
+   * </ol>
+   */
   @Bean
   public SessionAuthenticationStrategy sessionAuthenticationStrategy() {
-    return new ChangeSessionIdAuthenticationStrategy();
+    ConcurrentSessionControlAuthenticationStrategy concurrentStrategy =
+        new ConcurrentSessionControlAuthenticationStrategy(sessionRegistry);
+    concurrentStrategy.setMaximumSessions(MAX_SESSIONS_PER_USER);
+
+    ChangeSessionIdAuthenticationStrategy fixationStrategy =
+        new ChangeSessionIdAuthenticationStrategy();
+
+    RegisterSessionAuthenticationStrategy registerStrategy =
+        new RegisterSessionAuthenticationStrategy(sessionRegistry);
+
+    return new CompositeSessionAuthenticationStrategy(
+        List.of(concurrentStrategy, fixationStrategy, registerStrategy));
   }
 
   @Bean

@@ -3,3 +3,9 @@ spring:
     name: spring-sns-sample-project
   profiles:
     active: dev
+  session:
+    store-type: redis
+    timeout: 30m
+    redis:
+      repository-type: indexed
+      namespace: sns

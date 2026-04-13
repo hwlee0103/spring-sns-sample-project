@@ -24,6 +24,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-webmvc")
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-security")
+    implementation("org.springframework.boot:spring-boot-starter-session-data-redis")
     implementation("org.springframework.security:spring-security-crypto")
     implementation("com.password4j:password4j:1.8.2")
     implementation("com.bucket4j:bucket4j_jdk17-core:8.14.0")
