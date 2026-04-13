@@ -36,12 +36,12 @@ import tools.jackson.databind.ObjectMapper;
 @EnableWebSecurity
 public class SecurityConfig {
 
-  static final int MAX_SESSIONS_PER_USER = 3;
-
   private final SessionRegistry sessionRegistry;
+  private final AppSessionProperties sessionProperties;
 
-  public SecurityConfig(SessionRegistry sessionRegistry) {
+  public SecurityConfig(SessionRegistry sessionRegistry, AppSessionProperties sessionProperties) {
     this.sessionRegistry = sessionRegistry;
+    this.sessionProperties = sessionProperties;
   }
 
   @Bean
@@ -49,7 +49,8 @@ public class SecurityConfig {
       HttpSecurity http,
       Environment env,
       AuthenticationManager authenticationManager,
-      ObjectMapper objectMapper)
+      ObjectMapper objectMapper,
+      RateLimitProperties rateLimitProperties)
       throws Exception {
     boolean devProfile = Arrays.asList(env.getActiveProfiles()).contains("dev");
 
@@ -69,7 +70,8 @@ public class SecurityConfig {
                     .csrfTokenRequestHandler(csrfRequestHandler)
                     .ignoringRequestMatchers("/h2-console/**"))
         .addFilterAfter(csrfCookieFilter(), UsernamePasswordAuthenticationFilter.class)
-        .addFilterBefore(rateLimitFilter(), UsernamePasswordAuthenticationFilter.class)
+        .addFilterBefore(
+            rateLimitFilter(rateLimitProperties), UsernamePasswordAuthenticationFilter.class)
         .addFilterAfter(absoluteSessionTimeoutFilter(), ConcurrentSessionFilter.class)
         // formLogin 대신 커스텀 JSON 인증 필터 등록
         .addFilterAt(loginFilter, UsernamePasswordAuthenticationFilter.class)
@@ -80,7 +82,7 @@ public class SecurityConfig {
                     // sessionFixation 은 표준 필터 전용. 커스텀 RestAuthenticationFilter 는
                     // CompositeSessionAuthenticationStrategy 에서 별도 처리한다.
                     .sessionFixation(fix -> fix.changeSessionId())
-                    .maximumSessions(MAX_SESSIONS_PER_USER)
+                    .maximumSessions(sessionProperties.maxSessionsPerUser())
                     .sessionRegistry(sessionRegistry)
                     .expiredSessionStrategy(
                         event -> {
@@ -166,13 +168,13 @@ public class SecurityConfig {
   }
 
   @Bean
-  public RateLimitFilter rateLimitFilter() {
-    return new RateLimitFilter();
+  public RateLimitFilter rateLimitFilter(RateLimitProperties rateLimitProperties) {
+    return new RateLimitFilter(rateLimitProperties);
   }
 
   @Bean
   public AbsoluteSessionTimeoutFilter absoluteSessionTimeoutFilter() {
-    return new AbsoluteSessionTimeoutFilter();
+    return new AbsoluteSessionTimeoutFilter(sessionProperties.absoluteTimeout());
   }
 
   @Bean
@@ -202,7 +204,7 @@ public class SecurityConfig {
   public SessionAuthenticationStrategy sessionAuthenticationStrategy() {
     ConcurrentSessionControlAuthenticationStrategy concurrentStrategy =
         new ConcurrentSessionControlAuthenticationStrategy(sessionRegistry);
-    concurrentStrategy.setMaximumSessions(MAX_SESSIONS_PER_USER);
+    concurrentStrategy.setMaximumSessions(sessionProperties.maxSessionsPerUser());
 
     ChangeSessionIdAuthenticationStrategy fixationStrategy =
         new ChangeSessionIdAuthenticationStrategy();

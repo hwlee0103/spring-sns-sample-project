@@ -20,7 +20,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class AbsoluteSessionTimeoutFilter extends OncePerRequestFilter {
 
   static final String SESSION_CREATED_AT = "SESSION_CREATED_AT";
-  private static final Duration ABSOLUTE_TIMEOUT = Duration.ofHours(24);
+  private final Duration absoluteTimeout;
+
+  public AbsoluteSessionTimeoutFilter(Duration absoluteTimeout) {
+    this.absoluteTimeout = absoluteTimeout;
+  }
 
   @Override
   protected void doFilterInternal(
@@ -35,7 +39,7 @@ public class AbsoluteSessionTimeoutFilter extends OncePerRequestFilter {
         // 기존 세션(배포 전 생성)에는 attribute 가 없으므로 실제 생성 시각을 사용
         createdAt = Instant.ofEpochMilli(session.getCreationTime());
         session.setAttribute(SESSION_CREATED_AT, createdAt);
-      } else if (Instant.now().isAfter(createdAt.plus(ABSOLUTE_TIMEOUT))) {
+      } else if (Instant.now().isAfter(createdAt.plus(absoluteTimeout))) {
         session.invalidate();
         SecurityContextHolder.clearContext();
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);

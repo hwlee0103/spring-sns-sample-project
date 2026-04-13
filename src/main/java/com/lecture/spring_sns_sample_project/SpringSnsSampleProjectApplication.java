@@ -2,8 +2,10 @@ package com.lecture.spring_sns_sample_project;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 
 @SpringBootApplication
+@ConfigurationPropertiesScan
 public class SpringSnsSampleProjectApplication {
 
   public static void main(String[] args) {

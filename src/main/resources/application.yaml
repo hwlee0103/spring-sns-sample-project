@@ -9,3 +9,10 @@ spring:
     redis:
       repository-type: indexed
       namespace: sns
+app:
+  session:
+    max-sessions-per-user: 3
+    absolute-timeout: 24h
+  rate-limit:
+    ip-requests-per-minute: 20
+    max-buckets: 10000
