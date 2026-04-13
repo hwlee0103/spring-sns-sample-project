@@ -507,6 +507,16 @@ server:
 7. ✅ **XorCsrfTokenRequestAttributeHandler** — BREACH 압축 공격 완화
 8. ✅ **Content-Security-Policy** — `default-src 'self'; script-src 'self'`
 
+### Phase 1.5 — Redis 세션 관리 (현재 진행)
+1. **Spring Session + Redis** — 세션 외부화 (`spring-boot-starter-session-data-redis`)
+2. **`RedisIndexedSessionRepository`** — principal 기반 세션 인덱스 (동시 세션 제어 + 일괄 무효화)
+3. **`SpringSessionBackedSessionRegistry`** — 다중 인스턴스 세션 레지스트리
+4. **`maximumSessions(3)`** — 사용자당 동시 세션 3개 (스마트폰/PC/태블릿)
+5. **Sliding Session (30분)** — idle timeout + absolute timeout (24시간) 보조
+6. **비밀번호 변경 시 즉시 세션 삭제** — `findByPrincipalName()` → 현재 세션 제외 일괄 삭제
+
+> 상세 설계: [§12. Redis 세션 관리 설계](#12-redis-세션-관리-설계)
+
 ### Phase 2 — SNS 기능 확장 시
 1. **Role 도입** — User/Admin
 2. **이메일 인증 흐름** (단기 JWT 1회용)
@@ -514,11 +524,10 @@ server:
 4. **계정 정지 / 복원** (Admin)
 5. **Remember-Me** (PersistentTokenRepository)
 
-### Phase 3 — 다중 인스턴스 / 다중 클라이언트
-1. **Spring Session + Redis** — 세션 외부화, 일괄 invalidate
-2. **2FA** (TOTP) — optional
-3. **OAuth2 소셜 로그인** — Google, GitHub
-4. **Audit log → 외부 SIEM** — Splunk, ELK
+### Phase 3 — 다중 클라이언트 / 운영 고도화
+1. **2FA** (TOTP) — optional
+2. **OAuth2 소셜 로그인** — Google, GitHub
+3. **Audit log → 외부 SIEM** — Splunk, ELK
 
 ### Phase 4 — 모바일 / 외부 API
 1. **JWT 발급 엔드포인트** (모바일 전용 `/api/auth/token`)
@@ -528,21 +537,357 @@ server:
 
 ---
 
-## 12. 알려진 트레이드오프
+## 12. Redis 세션 관리 설계
+
+### 12.1 왜 중앙 집중식 세션 저장소인가
+
+| 문제 | 인메모리 세션 | Redis 세션 |
+|------|-------------|-----------|
+| 다중 인스턴스 | sticky session 필수, 인스턴스 장애 시 세션 유실 | 어느 인스턴스든 세션 접근 가능 |
+| zero-downtime 배포 | 배포 시 사용자 강제 로그아웃 | 세션 유지 |
+| 사용자별 세션 조회 | 불가능 (인메모리 SessionRegistry 는 단일 JVM 한정) | `FindByIndexNameSessionRepository` 로 전체 인스턴스의 세션 일괄 조회 |
+| 세션 일괄 무효화 | tokenVersion 폴링 방식 (지연 있음) | 즉시 삭제 가능 |
+| 재기동 시 | 모든 세션 소실 | Redis 에 영속, 사용자 영향 없음 |
+
+> **결론**: SNS 서비스의 가용성과 다중 디바이스 세션 관리를 위해 Redis 를 세션 저장소로 채택한다.
+
+### 12.2 의존성
+
+```kotlin
+// build.gradle.kts
+dependencies {
+    // Spring Session + Redis (Spring Boot 4.x 스타터)
+    implementation("org.springframework.boot:spring-boot-starter-session-data-redis")
+    // ↑ 내부적으로 spring-session-data-redis + spring-boot-starter-data-redis (Lettuce) 포함
+    //   버전은 Spring Boot BOM 이 관리 — 명시적 버전 지정 불필요
+}
+```
+
+> **참고**: Spring Boot 4.x 에서 `spring-boot-starter-session-data-redis` 스타터가 도입되어 별도로 `spring-session-data-redis` + `spring-boot-starter-data-redis` 를 나눠 선언할 필요가 없다.
+
+### 12.3 `@EnableRedisIndexedHttpSession` 권장 분석
+
+Spring Session 은 두 가지 Redis 저장소를 제공한다:
+
+| | `RedisSessionRepository` | `RedisIndexedSessionRepository` |
+|---|---|---|
+| 활성화 | `@EnableRedisHttpSession` (Boot 3.x+ 기본) | `@EnableRedisIndexedHttpSession` |
+| 보조 인덱스 | ❌ 없음 | ✅ principal name 으로 세션 조회 가능 |
+| 세션 이벤트 | ❌ 미지원 | ✅ `SessionCreatedEvent`, `SessionDeletedEvent`, `SessionExpiredEvent` |
+| `FindByIndexNameSessionRepository` | ❌ 미구현 | ✅ 구현 — `SpringSessionBackedSessionRegistry` 필수 전제 |
+| 동시 세션 제어 (`maximumSessions`) | ❌ 불가 | ✅ 가능 |
+| Redis Cluster 주의 | — | keyspace notification 이 random node 1개만 구독됨 → 일부 인덱스 정리 누락 가능 |
+
+#### 권장: `@EnableRedisIndexedHttpSession` 사용
+
+**이유:**
+
+1. **동시 세션 제어** — SNS 서비스에서 사용자당 최대 세션 수를 제한하려면 `SpringSessionBackedSessionRegistry` 가 필요하고, 이는 `FindByIndexNameSessionRepository` 를 요구한다.
+2. **비밀번호 변경 시 전체 세션 즉시 무효화** — 현재 tokenVersion 폴링 방식(최대 5분 지연)을 principal name 으로 세션을 찾아 즉시 삭제하는 방식으로 업그레이드.
+3. **관리자 강제 로그아웃** — Phase 2 Admin 기능에서 특정 사용자의 모든 세션을 일괄 무효화.
+4. **세션 이벤트** — 감사 로그(`AuthEventListener`)에 세션 생성/만료/삭제 이벤트 추가 가능.
+
+**활성화 방법 (둘 중 택 1):**
+
+```yaml
+# 방법 A: application.yaml (Boot auto-config 활용 — 권장)
+spring:
+  session:
+    store-type: redis
+    redis:
+      repository-type: indexed
+```
+
+```java
+// 방법 B: @Configuration 어노테이션 (Boot auto-config 비활성화 시)
+@Configuration
+@EnableRedisIndexedHttpSession(maxInactiveIntervalInSeconds = 1800)
+public class SessionConfig { }
+```
+
+> **주의**: Spring Boot auto-config 와 `@Enable*` 어노테이션을 동시에 사용하면 충돌한다. **방법 A (프로퍼티)** 를 권장한다.
+
+#### 알려진 이슈
+
+| 이슈 | 영향 | 대응 |
+|------|------|------|
+| 고아 인덱스 (spring-session#3453) | `RedisIndexedSessionRepository` 의 인덱스 키에 TTL 이 없어 orphan 발생 가능 | 주기적 Redis SCAN + 정리 배치 또는 모니터링 |
+| Redis Cluster keyspace notification | 단일 노드만 구독 → 일부 세션 만료 이벤트 누락 | Sentinel 또는 단일 마스터 구성 권장 (이 프로젝트 규모에 적합) |
+| namespace 프로퍼티 회귀 (spring-boot#3423) | Boot 3.5.0 에서 `spring.session.redis.namespace` 미적용 | Boot 4.0.5 에서 수정됨 |
+
+### 12.4 `SpringSessionBackedSessionRegistry` — 동시 세션 제어
+
+인메모리 `SessionRegistryImpl` 은 단일 JVM 에서만 유효하다. 다중 인스턴스에서는 `SpringSessionBackedSessionRegistry` 가 Redis 의 인덱스를 활용하여 전체 인스턴스에 걸친 세션을 관리한다.
+
+```java
+@Configuration
+public class SecurityConfig<S extends Session> {
+
+    private final FindByIndexNameSessionRepository<S> sessionRepository;
+
+    // 생성자 주입
+    public SecurityConfig(FindByIndexNameSessionRepository<S> sessionRepository) {
+        this.sessionRepository = sessionRepository;
+    }
+
+    @Bean
+    public SpringSessionBackedSessionRegistry<S> sessionRegistry() {
+        return new SpringSessionBackedSessionRegistry<>(sessionRepository);
+    }
+
+    @Bean
+    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        return http
+            .sessionManagement(session -> session
+                .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
+                .sessionFixation(fix -> fix.changeSessionId())
+                .maximumSessions(3)
+                    .sessionRegistry(sessionRegistry())
+            )
+            // ... 기존 설정
+            .build();
+    }
+}
+```
+
+#### 사용자별 세션 일괄 무효화 (비밀번호 변경 시)
+
+```java
+// UserService — 비밀번호 변경 후 다른 디바이스 세션 즉시 삭제
+public void changePassword(Long userId, String currentRaw, String newRaw, String currentSessionId) {
+    User user = getById(userId);
+    if (!passwordEncoder.matches(currentRaw, user.getPassword())) {
+        throw UserException.invalidCredentials();
+    }
+    user.changePassword(passwordEncoder.encode(newRaw));
+    user.bumpTokenVersion();
+
+    // Redis 에서 해당 사용자의 모든 세션 조회 → 현재 세션 제외하고 삭제
+    Map<String, ? extends Session> sessions =
+        sessionRepository.findByPrincipalName(user.getEmail());
+    sessions.forEach((id, session) -> {
+        if (!id.equals(currentSessionId)) {
+            sessionRepository.deleteById(id);
+        }
+    });
+}
+```
+
+> **개선점**: 기존 tokenVersion 폴링 방식(최대 5분 지연) → Redis 즉시 삭제(0초 지연). tokenVersion 은 fallback 안전장치로 유지.
+
+### 12.5 SNS 서비스에 적합한 `sessionManagement` 설계
+
+#### 동시 세션 수 (`maximumSessions`)
+
+| 정책 | 값 | 근거 |
+|------|---|------|
+| **권장: `maximumSessions(3)`** | 3 | 스마트폰 + PC + 태블릿. SNS 특성상 다중 디바이스 동시 사용이 일반적 |
+| 대안 A: 무제한 | — | Twitter/Threads 스타일. 관리 편의성 ↓ |
+| 대안 B: 1 | — | 금융권 수준. SNS 에는 과도한 제한 → UX 악화 |
+
+#### 초과 세션 처리 전략
+
+| 전략 | 설정 | 동작 | SNS 적합도 |
+|------|------|------|-----------|
+| **가장 오래된 세션 만료** (권장) | `maxSessionsPreventsLogin(false)` (기본값) | 새 로그인 성공, 가장 오래된 세션 자동 만료 | ✅ 사용자 경험 우선 |
+| 신규 로그인 거부 | `maxSessionsPreventsLogin(true)` | 기존 세션이 maximumSessions 개 이상이면 로그인 거부 | ❌ SNS 에 부적합 — 사용자가 기존 세션을 직접 종료해야 함 |
+
+> **권장**: `maxSessionsPreventsLogin(false)` — SNS 사용자가 새 디바이스에서 로그인할 때 가장 오래된 세션이 자동 만료된다. 사용자에게 "다른 기기에서 로그아웃되었습니다" 알림을 보여줄 수 있다.
+
+#### 전체 `sessionManagement` DSL 권장 설정
+
+```java
+http.sessionManagement(session -> session
+    // 세션 생성 정책: 인증이 필요할 때만 생성
+    .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
+
+    // 세션 고정 공격 방어: 로그인 시 세션 ID 변경 (기존 속성 유지)
+    .sessionFixation(fix -> fix.changeSessionId())
+
+    // 동시 세션 제어: 사용자당 최대 3개, 초과 시 가장 오래된 세션 만료
+    .maximumSessions(3)
+        .sessionRegistry(sessionRegistry())
+        // maxSessionsPreventsLogin(false) 는 기본값이므로 명시하지 않아도 됨
+
+    // 유효하지 않은 세션 ID 요청 시 리다이렉트 대신 401 반환
+    .invalidSessionStrategy((request, response) -> {
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setContentType("application/json");
+        response.getWriter().write("{\"message\":\"세션이 만료되었습니다.\"}");
+    })
+);
+```
+
+### 12.6 세션 만료 전략: Sliding Session
+
+#### Sliding Session 이란
+
+매 요청마다 세션의 만료 시간이 갱신되는 방식이다. 사용자가 활동 중이면 세션이 유지되고, 비활동 상태가 지속되면 만료된다.
+
+```
+[사용자 활동]          [비활동 30분]          [만료]
+  ├─ 요청 → TTL 리셋   ├─ 요청 → TTL 리셋   ├─ 30분 경과 → 세션 삭제
+  │    (30분 뒤 만료)   │    (30분 뒤 만료)   │
+  t=0                  t=15m                 t=45m → 만료: t=75m
+```
+
+Spring Session 은 기본적으로 **Sliding Session** 으로 동작한다. 매 요청에서 `session.setLastAccessedTime()` 이 갱신되고, Redis TTL 이 재설정된다.
+
+#### TTL 설정
+
+```yaml
+# application.yaml (공통)
+spring:
+  session:
+    timeout: 30m           # idle timeout (sliding)
+    store-type: redis
+    redis:
+      repository-type: indexed
+      namespace: sns        # Redis 키 접두사: "sns:sessions:..."
+
+# application-prod.yaml (운영)
+spring:
+  session:
+    timeout: 30m
+
+server:
+  servlet:
+    session:
+      cookie:
+        secure: true
+        http-only: true
+        same-site: lax
+        name: SESSION        # Spring Session 기본 쿠키 이름
+```
+
+> **참고**: Redis 의 실제 TTL 은 `maxInactiveInterval + 5분` 으로 설정된다. 추가 5분은 세션 정리 처리를 위한 여유 시간이다.
+
+#### Absolute Timeout (절대 만료) — 보조 전략
+
+Sliding Session 만으로는 공격자가 탈취한 세션을 지속적으로 갱신할 수 있다. 절대 만료를 보조적으로 적용:
+
+| 만료 종류 | 값 | 구현 |
+|----------|---|------|
+| **Idle timeout** (sliding) | 30분 | `spring.session.timeout=30m` (Spring Session 기본) |
+| **Absolute timeout** | 24시간 | 세션 attribute `SESSION_CREATED_AT` 저장 → 필터에서 검증 |
+
+```java
+// AbsoluteSessionTimeoutFilter — OncePerRequestFilter
+Instant createdAt = (Instant) session.getAttribute("SESSION_CREATED_AT");
+if (createdAt != null && Instant.now().isAfter(createdAt.plus(Duration.ofHours(24)))) {
+    session.invalidate();
+    // 401 응답
+}
+```
+
+> **SNS 권장**: idle 30분 + absolute 24시간. Remember-Me 사용 시 absolute 7일로 연장 가능.
+
+### 12.7 Redis 인프라 설정
+
+#### Redis 연결 설정
+
+```yaml
+# application.yaml
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      # password: ${REDIS_PASSWORD}    # 운영 환경에서는 환경변수로 주입
+      # ssl:
+      #   enabled: true                # 운영 환경에서 TLS 활성화
+
+# application-dev.yaml
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+```
+
+#### Redis keyspace notification 활성화
+
+`RedisIndexedSessionRepository` 가 세션 만료 이벤트를 수신하려면 Redis 의 keyspace notification 이 활성화되어야 한다:
+
+```
+# redis.conf
+notify-keyspace-events Egx
+```
+
+> Spring Session 이 자동으로 `CONFIG SET notify-keyspace-events` 를 시도하지만, Redis 가 `CONFIG` 명령을 비활성화한 경우(AWS ElastiCache 등) 수동 설정 필요.
+
+#### Redis 키 구조 (`namespace: sns`)
+
+```
+sns:sessions:<sessionId>              # Hash — 세션 데이터
+sns:sessions:expires:<sessionId>      # String — TTL 마커
+sns:expirations:<expireTime>          # Set — 해당 시간에 만료될 세션 ID 목록
+sns:sessions:index:org.springframework.session.FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME:<email>
+                                      # Set — 사용자(email)의 활성 세션 ID 목록
+```
+
+### 12.8 전체 구성 흐름도
+
+```
+[Browser]                    [Spring Boot (N instances)]           [Redis]
+   │                              │                                   │
+   │ POST /api/auth/login         │                                   │
+   │ ─────────────────────────► │                                   │
+   │                              │ authenticate()                    │
+   │                              │ → SessionRegistry.registerNewSession()
+   │                              │ ──────────────────────────────► │
+   │                              │   HSET sns:sessions:<id>          │
+   │                              │   SADD principal_index:<email>    │
+   │ ◄── SESSION cookie           │                                   │
+   │                              │                                   │
+   │ GET /api/post (인증 요청)    │                                   │
+   │ ─────────────────────────► │                                   │
+   │                              │ HGETALL sns:sessions:<id> ──────► │
+   │                              │ ◄── SecurityContext 복원           │
+   │                              │ → lastAccessedTime 갱신 (sliding) │
+   │                              │ ──────────────────────────────► │
+   │                              │   EXPIRE 재설정                    │
+   │ ◄── 200 응답                 │                                   │
+   │                              │                                   │
+   │ [30분 비활동]                │                                   │
+   │                              │   Redis TTL 만료 ───────────────► │
+   │                              │   SessionExpiredEvent 발행         │
+   │                              │   principal_index 에서 제거        │
+```
+
+### 12.9 마이그레이션 계획 (인메모리 → Redis)
+
+| 단계 | 작업 | 영향 |
+|------|------|------|
+| 1 | `build.gradle.kts` 에 `spring-boot-starter-session-data-redis` 추가 | 없음 |
+| 2 | `application.yaml` 에 Redis 연결 + `spring.session.redis.repository-type=indexed` 설정 | 없음 |
+| 3 | `SessionConfig` 클래스 작성 — `SpringSessionBackedSessionRegistry` 빈 등록 | 없음 |
+| 4 | `SecurityConfig` 에서 `sessionManagement` DSL 에 `maximumSessions(3)` + `sessionRegistry()` 추가 | 기존 세션 무효화 (1회성) |
+| 5 | `UserService.changePassword()` 에서 `findByPrincipalName()` + 일괄 삭제로 전환 | tokenVersion 폴링 → 즉시 삭제로 개선 |
+| 6 | `application-dev.yaml` 에 로컬 Redis 설정 (`localhost:6379`) | 로컬 Redis 인스턴스 필요 |
+| 7 | tokenVersion 검증 로직은 fallback 안전장치로 유지 | — |
+
+> **배포 시 주의**: Redis 전환 시 기존 인메모리 세션은 모두 소실된다. 배포 공지 후 전환하거나, 사용자가 적은 시간대에 진행.
+
+---
+
+## 13. 알려진 트레이드오프
 
 | 결정 | 트레이드오프 |
 |------|-------------|
 | Session-Primary | 모바일 클라이언트 추가 시 별도 인증 채널 필요 → Phase 4 에서 JWT 추가로 해소 |
-| HttpSession in-memory | 다중 인스턴스 미지원 → Phase 3 에서 Redis 로 외부화 |
+| Redis 세션 저장소 | 인프라 의존성 추가 (Redis 서버 필요). dev 환경에서도 로컬 Redis 실행 필요 → Docker Compose 또는 embedded Redis 로 완화 |
+| `RedisIndexedSessionRepository` | 고아 인덱스 발생 가능 (spring-session#3453). 주기적 모니터링 필요 |
+| `maximumSessions(3)` | 4대 이상 디바이스 사용자는 가장 오래된 세션 자동 만료 → UX 알림으로 보완 |
 | CSRF Cookie repository (JS readable) | XSS 시 토큰 노출 가능 → CSP + 입력 sanitization 으로 보완 |
 | 비밀번호 정책 단순 (길이만) | NIST 권장에 부합. 복잡도 강제는 사용자 패턴(post-it)을 유도해 오히려 위험 |
 | Argon2 (memory-hard) | 인증 비용 ↑ (매 로그인 ~50ms) → rate limiting 과 함께 운영 |
 | 단기 토큰에 JWT | 키 회전 부담 → secret manager 필수 |
-| OAuth2 미도입 | 사용자가 가입 부담 ↑ → Phase 3 에서 도입 |
+| OAuth2 미도입 | 사용자가 가입 부담 ↑ → Phase 2 에서 도입 |
 
 ---
 
-## 13. 적용 이력 — Phase 1 구현 + 보안 취약점 수정
+## 14. 적용 이력 — Phase 1 구현 + 보안 취약점 수정
 
 ### 13.1 Phase 1 구현 상세 (2026-04-12)
 
@@ -670,13 +1015,14 @@ private static void requireOwnership(AuthUser authUser, Long targetId) {
 
 ---
 
-## 14. 결론
+## 15. 결론
 
 > **본 프로젝트는 단일 웹 클라이언트 + 단일 백엔드 구조이므로, Session-based 인증이 가장 단순하고 안전하며 운영 비용이 낮다.
 > JWT 는 모바일/외부 통합/단기 1회용 토큰 등 명확한 목적이 있을 때 한정해서 도입한다.**
 >
 > **Phase 0 (기본 인증) + Phase 1 (보안 강화) 가 모두 완료**되었으며, 해커 관점 리뷰에서 발견된 Critical/High 취약점도 즉시 수정됨.
-> 다음 단계는 Phase 2 (Role 도입, 이메일 인증, 비밀번호 재설정).
+> **Phase 1.5 (Redis 세션 관리)** 설계 완료 — `RedisIndexedSessionRepository` + `SpringSessionBackedSessionRegistry` 로 중앙 집중식 세션 관리, 동시 세션 제어(3개), Sliding Session(30분) 도입 예정.
+> 다음 단계는 Phase 1.5 구현 후 Phase 2 (Role 도입, 이메일 인증, 비밀번호 재설정).
 
 ---
 
