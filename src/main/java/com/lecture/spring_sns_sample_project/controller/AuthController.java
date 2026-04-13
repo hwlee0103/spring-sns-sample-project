@@ -31,6 +31,9 @@ public class AuthController {
   @GetMapping("/api/auth/me")
   public ResponseEntity<UserResponse> me(
       @AuthenticationPrincipal AuthUser authUser, HttpServletRequest httpRequest) {
+    if (authUser == null) {
+      return ResponseEntity.status(401).build();
+    }
     try {
       User user = userService.getById(authUser.getId());
 

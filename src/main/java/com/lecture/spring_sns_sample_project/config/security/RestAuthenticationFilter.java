@@ -3,6 +3,7 @@ package com.lecture.spring_sns_sample_project.config.security;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationServiceException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -32,8 +33,7 @@ public class RestAuthenticationFilter extends AbstractAuthenticationProcessingFi
   @Override
   public Authentication attemptAuthentication(
       HttpServletRequest request, HttpServletResponse response) throws AuthenticationException {
-    if (!"application/json".equalsIgnoreCase(request.getContentType())
-        && !"application/json;charset=UTF-8".equalsIgnoreCase(request.getContentType())) {
+    if (!isJsonContentType(request.getContentType())) {
       throw new AuthenticationServiceException(
           "Content-Type 이 application/json 이어야 합니다: " + request.getContentType());
     }
@@ -52,6 +52,18 @@ public class RestAuthenticationFilter extends AbstractAuthenticationProcessingFi
         UsernamePasswordAuthenticationToken.unauthenticated(email, password);
 
     return getAuthenticationManager().authenticate(authRequest);
+  }
+
+  /** {@code application/json} 및 그 변형({@code application/json; charset=utf-8} 등)을 허용. */
+  private static boolean isJsonContentType(String contentType) {
+    if (contentType == null) {
+      return false;
+    }
+    try {
+      return MediaType.parseMediaType(contentType).isCompatibleWith(MediaType.APPLICATION_JSON);
+    } catch (IllegalArgumentException e) {
+      return false;
+    }
   }
 
   private record LoginBody(String email, String password) {}
