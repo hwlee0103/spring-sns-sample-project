@@ -856,6 +856,165 @@ public void changePassword(Long userId, String currentRaw, String newRaw, String
 
 > **개선점**: 기존 tokenVersion 폴링 방식(최대 5분 지연) → Redis 즉시 삭제(0초 지연). tokenVersion 은 fallback 안전장치로 유지.
 
+### 12.4.1 TokenVersionFilter — 매 요청 검증이 필요한 이유
+
+#### 문제: 현재 방어 체계의 빈틈
+
+비밀번호 변경 시 다른 세션을 무효화하는 현재 구현은 **2중 방어**로 구성된다:
+
+```
+방어 1차: invalidateOtherSessions()  — Redis 에서 세션 즉시 삭제
+방어 2차: tokenVersion 비교          — /api/auth/me 에서만 검증
+```
+
+이 구조에는 **다음 시나리오에서 공격자의 세션이 살아남는 빈틈**이 있다:
+
+#### 시나리오 1: 공격자가 `/api/auth/me`를 호출하지 않는 경우
+
+```
+[피해자: 디바이스 A]              [공격자: 탈취 세션 B]
+   │                                │
+   │ PUT /api/user/1/password       │
+   │ → tokenVersion: 0 → 1         │
+   │ → invalidateOtherSessions()   │
+   │   Redis 에서 세션 B 삭제 시도  │
+   │                                │
+   │                                │ POST /api/post
+   │                                │ ← 세션 B 가 Redis 에서 삭제되었으면 401
+   │                                │ ← 그러나 아래 시나리오에서 삭제가 실패하면?
+```
+
+1차 방어(Redis 삭제)가 **성공하면** 문제없다. 그러나 **실패하는 경우**:
+
+#### 시나리오 2: Redis 세션 인덱스 불일치 (spring-session#3453)
+
+`findByPrincipalName(email)` 은 Redis 의 보조 인덱스(principal name index)를 조회한다. 이 인덱스에는 **알려진 이슈**(spring-session#3453)가 있다:
+
+- 인덱스 키에 TTL 이 없어 **고아 인덱스** 가 발생할 수 있음
+- 반대로, 세션은 존재하지만 **인덱스에서 누락**될 수도 있음
+- Redis Cluster 환경에서는 keyspace notification 이 단일 노드만 구독하여 인덱스 정리가 불완전
+
+인덱스 누락 시:
+```
+findByPrincipalName("victim@test.com")
+→ 인덱스에 세션 B 가 없음 (누락)
+→ 세션 B 는 삭제되지 않음
+→ 공격자의 세션 B 는 여전히 유효
+→ 2차 방어(tokenVersion)는 /api/auth/me 에서만 검증
+→ 공격자가 /api/auth/me 를 호출하지 않으면 영원히 검증되지 않음
+```
+
+#### 시나리오 3: 요청 동시성 (in-flight 요청)
+
+```
+t=0    공격자: POST /api/post 요청 시작 (세션 B)
+t=1    피해자: changePassword() → invalidateOtherSessions()
+t=2    Redis 에서 세션 B 삭제됨
+t=3    공격자: 요청이 이미 SecurityContext 에 로드된 상태 → 정상 처리됨
+```
+
+이 경우 단일 요청은 통과하지만, 이후 요청은 차단된다. 이것은 수용 가능한 수준이다.
+
+#### 시나리오 4: 계정 삭제/정지 시
+
+현재 `DELETE /api/user/{id}` 는 Redis 세션을 무효화하지 않는다 (#126). tokenVersion 검증이 매 요청에서 이루어진다면, 삭제된 사용자의 DB 조회 실패 → 세션 무효화가 자동으로 처리된다.
+
+#### 결론: 왜 TokenVersionFilter 가 필요한가
+
+| 방어 계층 | 역할 | 한계 |
+|----------|------|------|
+| **1차: Redis 세션 삭제** | 즉시 무효화 (0초) | 인덱스 누락 시 삭제 실패 가능 |
+| **2차: tokenVersion 비교 (현재: /api/auth/me 만)** | fallback 안전장치 | 공격자가 해당 경로를 호출하지 않으면 검증 안 됨 |
+| **2차 강화: TokenVersionFilter (전 경로)** | **모든 인증 요청에서 검증** | DB 조회 비용 → Caffeine 캐시로 완화 |
+
+> **1차 방어(Redis 삭제)만으로 충분하지 않은가?**
+> 대부분의 경우 충분하다. 그러나 **spring-session 의 알려진 인덱스 이슈(#3453)** 가 존재하는 한,
+> Redis 삭제에만 의존하는 것은 "best-effort" 에 불과하다.
+> 보안에서 "대부분 작동함"은 "취약함"과 같다. TokenVersionFilter 는 이 빈틈을 메운다.
+
+#### 설계: TokenVersionFilter
+
+```java
+/**
+ * 매 인증 요청에서 세션의 tokenVersion 과 DB 의 tokenVersion 을 비교.
+ * 불일치 시 세션을 무효화한다.
+ *
+ * DB 부하를 줄이기 위해 userId → tokenVersion 을 Caffeine 캐시(30초 TTL)로 관리.
+ * 비밀번호 변경 시 캐시를 evict 하면 최대 30초 이내 모든 세션이 무효화된다.
+ */
+public class TokenVersionFilter extends OncePerRequestFilter {
+
+    private final UserRepository userRepository;
+    private final Cache<Long, Integer> tokenVersionCache;  // Caffeine, 30초 TTL
+
+    @Override
+    protected void doFilterInternal(...) {
+        AuthUser authUser = getAuthUserFromSecurityContext();
+        if (authUser == null) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        int currentVersion = tokenVersionCache.get(
+            authUser.getId(),
+            id -> userRepository.findById(id)
+                .map(User::getTokenVersion)
+                .orElse(-1)  // 삭제된 사용자 → 불일치 유도
+        );
+
+        if (authUser.getTokenVersion() != currentVersion) {
+            session.invalidate();
+            SecurityContextHolder.clearContext();
+            FilterResponseUtils.writeJsonError(response, 401, "세션이 만료되었습니다.");
+            return;
+        }
+
+        filterChain.doFilter(request, response);
+    }
+}
+```
+
+#### 성능 영향 분석
+
+| 항목 | TokenVersionFilter 없음 (현재) | TokenVersionFilter 도입 후 |
+|------|-------------------------------|--------------------------|
+| 매 요청 DB 조회 | 없음 | **없음** (Caffeine 캐시 hit) |
+| 캐시 miss 시 | — | `userRepository.findById()` 1회 (30초당 1회) |
+| 비밀번호 변경 후 무효화 지연 | 최대 24시간 (absolute timeout) | **최대 30초** (캐시 TTL) |
+| 메모리 사용 | — | 활성 사용자 수 × ~50bytes (userId + int) |
+
+> **30초 캐시 TTL 근거**: 비밀번호 변경은 긴급 상황(계정 탈취 의심)에서 발생한다.
+> 30초는 보안과 성능의 균형점이다. 즉시성이 필요하면 TTL 을 5초로 줄이거나,
+> 비밀번호 변경 시 `tokenVersionCache.invalidate(userId)` 를 호출하여 0초 무효화도 가능하다.
+
+#### 방어 체계 최종 구성
+
+```
+[인증 요청 도달]
+  │
+  ├─ Spring Security: 세션에서 SecurityContext 복원 → AuthUser 주입
+  │
+  ├─ TokenVersionFilter (신규)
+  │   ├─ Caffeine 캐시에서 userId → tokenVersion 조회
+  │   ├─ 캐시 miss → DB 조회 → 캐시에 저장 (30초 TTL)
+  │   ├─ authUser.tokenVersion ≠ currentVersion → 세션 무효화 + 401
+  │   └─ 일치 → 통과
+  │
+  ├─ AbsoluteSessionTimeoutFilter: 24시간 절대 만료
+  │
+  └─ Controller 처리
+```
+
+```
+[비밀번호 변경 시]
+  │
+  ├─ 1차 방어: invalidateOtherSessions() — Redis 세션 즉시 삭제 (0초)
+  ├─ 2차 방어: User.tokenVersion 증가
+  │            → TokenVersionFilter 가 캐시 TTL 이내(30초) 에 감지
+  │            → 또는 changePassword 에서 tokenVersionCache.invalidate(userId) 호출 시 즉시 감지
+  └─ 현재 세션: refreshSecurityContext() 로 tokenVersion 갱신 → 본인은 로그아웃 안 됨
+```
+
 ### 12.5 SNS 서비스에 적합한 `sessionManagement` 설계
 
 #### 동시 세션 수 (`maximumSessions`)
