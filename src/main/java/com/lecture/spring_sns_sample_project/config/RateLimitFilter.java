@@ -71,8 +71,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
   }
 
   private static void rejectTooManyRequests(HttpServletResponse response) throws IOException {
-    response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
-    response.setContentType("application/json");
-    response.getWriter().write("{\"message\":\"요청이 너무 많습니다. 잠시 후 다시 시도해주세요.\"}");
+    FilterResponseUtils.writeJsonError(
+        response, HttpStatus.TOO_MANY_REQUESTS.value(), "요청이 너무 많습니다. 잠시 후 다시 시도해주세요.");
   }
 }

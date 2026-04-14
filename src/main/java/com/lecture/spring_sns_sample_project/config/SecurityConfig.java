@@ -84,12 +84,11 @@ public class SecurityConfig {
                     .maximumSessions(sessionProperties.maxSessionsPerUser())
                     .sessionRegistry(sessionRegistry)
                     .expiredSessionStrategy(
-                        event -> {
-                          var response = event.getResponse();
-                          response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                          response.setContentType("application/json;charset=UTF-8");
-                          response.getWriter().write("{\"message\":\"세션이 만료되었습니다.\"}");
-                        }))
+                        event ->
+                            FilterResponseUtils.writeJsonError(
+                                event.getResponse(),
+                                HttpServletResponse.SC_UNAUTHORIZED,
+                                "세션이 만료되었습니다.")))
         .authorizeHttpRequests(
             auth ->
                 auth.requestMatchers(HttpMethod.POST, "/api/user")

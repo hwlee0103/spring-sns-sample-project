@@ -42,9 +42,8 @@ public class AbsoluteSessionTimeoutFilter extends OncePerRequestFilter {
       } else if (Instant.now().isAfter(createdAt.plus(absoluteTimeout))) {
         session.invalidate();
         SecurityContextHolder.clearContext();
-        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        response.setContentType("application/json;charset=UTF-8");
-        response.getWriter().write("{\"message\":\"세션이 만료되었습니다. 다시 로그인해주세요.\"}");
+        FilterResponseUtils.writeJsonError(
+            response, HttpServletResponse.SC_UNAUTHORIZED, "세션이 만료되었습니다. 다시 로그인해주세요.");
         return;
       }
     }
