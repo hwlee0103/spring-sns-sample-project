@@ -1418,8 +1418,164 @@ UserController.changePassword()
 > JWT 는 모바일/외부 통합/단기 1회용 토큰 등 명확한 목적이 있을 때 한정해서 도입한다.**
 >
 > **Phase 0 (기본 인증) + Phase 1 (보안 강화) + Phase 1.5 (Redis 세션 관리 + 보안 취약점 수정) 모두 완료.**
-> 해커 관점 리뷰 2회에서 발견된 Critical 3건 + High 3건 + Warning 6건을 즉시 수정함.
-> 다음 단계는 Phase 2 (Role 도입, 이메일 인증, 비밀번호 재설정).
+> Phase 2 Role 도입 완료. 해커 관점 리뷰 3회 + 코드 리뷰 5회에서 발견된 이슈 중 Critical 3건 + Warning 17건을 수정함.
+> 잔여 개선 사항 13건은 §16 에 우선순위별 정리. 다음 단계는 Phase 2.1 (TokenVersionFilter + 보안 강화).
+
+---
+
+## 16. 개선 사항 및 권장 사항
+
+> 해커 관점 리뷰 3회(Review #7, #9, #12) + 코드 리뷰 5회(Review #8, #10, #11)에서 도출된 미해결 항목을 통합 정리한다.
+> 우선순위는 **공격 가능성 × 피해 규모**로 결정하며, 구현 시 Phase 로드맵과 연계한다.
+
+### 16.1 즉시 권장 — 보안 강화 (Phase 2.1)
+
+운영 전 반드시 적용해야 하는 보안 개선 사항.
+
+#### (1) TokenVersionFilter — 매 요청 세션 유효성 검증 [High, #123]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | tokenVersion 검증이 `/api/auth/me` 에서만 수행됨. 공격자가 해당 경로를 회피하면 비밀번호 변경 후에도 탈취 세션이 최대 24시간 유효 |
+| **공격 시나리오** | 세션 탈취 → 피해자 비밀번호 변경 → Redis 인덱스 누락(spring-session#3453)으로 삭제 실패 → 공격자가 `/api/auth/me` 미호출 → 탈취 세션으로 게시글 작성/계정 삭제 가능 |
+| **구현** | `TokenVersionFilter` (`OncePerRequestFilter`) + Caffeine 캐시(userId → tokenVersion, 30초 TTL). 비밀번호 변경 시 캐시 evict 하면 0초 무효화 |
+| **성능** | 매 요청 DB 조회 없음 (캐시 hit). 30초당 1회 miss → `findById` 1회 |
+| **상세 설계** | [§12.4.1 TokenVersionFilter](#1241-tokenversionfilter--매-요청-검증이-필요한-이유) |
+
+#### (2) 계정 삭제 시 Redis 세션 무효화 [Medium, #126]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | `DELETE /api/user/{id}` 가 DB 만 삭제하고 Redis 세션은 남겨둠. 삭제된 계정의 다른 디바이스 세션이 만료까지 유효 |
+| **구현** | `UserController.deleteUser()` 에서 `invalidateOtherSessions()` + 현재 세션 무효화 추가 |
+
+#### (3) FilterResponseUtils JSON injection 방어 [Medium, #124]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | `writeJsonError()` 가 문자열 결합으로 JSON 생성. public 메서드라 향후 사용자 입력 전달 시 JSON injection 가능 |
+| **구현** | `ObjectMapper` 또는 `Map.of("message", message)` + Jackson 직렬화로 교체 |
+
+#### (4) 감사 로그 개행 삽입 방어 [Medium, #105]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | 로그인 이메일에 `\n` 삽입 시 가짜 감사 로그 생성 가능 (log injection) |
+| **구현** | `AuthEventListener` 에서 principal name 의 `\r\n\t` → `_` 치환. 또는 JSON 구조화 로깅(Logback JSON encoder) 도입 |
+
+#### (5) Pageable size 상한 설정 [Medium, #100]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | `?size=2147483647` 로 전체 테이블 스캔 + OOM DoS |
+| **구현** | `spring.data.web.pageable.max-page-size=100` 프로퍼티 추가 (1줄) |
+
+#### (6) Cookie 보안 플래그 기본값 적용 [Low, #73 #98 #128]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | `profiles.active=dev` 가 기본값이라 배포 실수 시 cookie 보안 없이 운영 가능 |
+| **구현** | `application.yaml` (base)에 `secure: true`, `http-only: true`, `same-site: lax` 설정 → `application-dev.yaml` 에서 `secure: false` 로 완화 |
+
+#### (7) GlobalExceptionHandler catch-all 추가 [Low, #106]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | 미처리 예외 시 Spring 기본 에러 응답으로 스택트레이스/클래스명 노출 가능 |
+| **구현** | `@ExceptionHandler(Exception.class)` 추가 — 500 + 일반 메시지. `server.error.include-stacktrace=never` |
+
+### 16.2 중기 권장 — 기능 확장 (Phase 2.2~2.3)
+
+SNS 서비스 확장에 필요한 기능 단위 개선 사항.
+
+#### (8) 비밀번호 이력 재사용 금지 + 동일 비밀번호 변경 차단 [#121, §9.3 설계 완료]
+
+| 항목 | 내용 |
+|------|------|
+| **구현 범위** | `PasswordHistory` entity + `findTop3ByUser` + `passwordEncoder.matches()` × 3회 |
+| **포함 항목** | 현재 비밀번호와 동일 여부 검증 (#121), 최근 3개 이력 재사용 금지, `UserException.samePassword()` / `recentlyUsedPassword()` 팩토리 |
+| **성능** | Argon2 matches × 3 = ~150ms. 비밀번호 변경은 드문 작업이므로 수용 가능 |
+
+#### (9) 유출 비밀번호 차단 — Pwned Passwords [#127, §9.3 설계 완료]
+
+| 항목 | 내용 |
+|------|------|
+| **구현 범위** | k-Anonymity 방식 SHA-1 prefix 5자리 API 호출. fallback(API 실패 시 통과) + circuit breaker |
+| **의존성** | 외부 API (`api.pwnedpasswords.com`). Spring `RestClient` 사용 |
+| **NIST 800-63B** | 유출 목록 대조 "SHALL" — 준수를 위해 필요 |
+
+#### (10) 회원가입 에러 메시지 통일 [Medium, #72 #125]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | email/nickname 중복 시 각각 다른 에러 메시지 → 등록 여부 열거 가능 |
+| **구현 방안** | 응답을 `"회원가입을 처리할 수 없습니다."` 로 통일. 닉네임 중복 확인은 별도 `GET /api/user/check-nickname/{nickname}` 제공 (UX) |
+| **트레이드오프** | UX 약화 (어떤 필드가 문제인지 모름) vs 보안 강화. SNS 에서는 보안 우선 |
+
+#### (11) H2 콘솔 CSRF 면제 프로필 연동 [Medium, #74 #101]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | `/h2-console/**` CSRF ignore 가 프로필 무관하게 적용됨. 접근 자체는 dev only 로 차단되지만, CSRF 면제는 남아있음 |
+| **구현** | SecurityConfig 에서 devProfile 조건으로 CSRF ignore 도 분기: `if (devProfile) { csrf.ignoringRequestMatchers("/h2-console/**"); }` |
+
+#### (12) 계정 잠금 — 로그인 실패 N회 시 임시 잠금 [Medium, #78 #103]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | IP 로테이션 시 무제한 시도 가능. IP 기반 rate limiting 만으로는 불충분 |
+| **구현** | Redis 에 `login_failures:{email}` 카운터 (TTL 15분). 5회 초과 시 30분 임시 잠금. `AuthenticationFailureEvent` 에서 카운터 증가, 성공 시 리셋 |
+| **주의** | 잠금 자체가 DoS 벡터가 될 수 있음 — CAPTCHA 도입이 더 안전한 대안 |
+
+#### (13) AuthUser Redis 직렬화에서 비밀번호 해시 제거 [Medium, #102]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | `AuthUser.password` 가 Redis 세션에 직렬화됨. Redis 접근 시 모든 활성 사용자의 Argon2 해시 노출 |
+| **구현** | `AuthUser.from(User)` 에서 password 를 `null` 로 설정. 인증 시에만 필요하고, 세션 저장 후에는 불필요 |
+| **영향** | `refreshSecurityContext()` 에서 `newAuthUser.getPassword()` 사용 부분 수정 필요 |
+
+### 16.3 코드 품질 개선 (Suggestion)
+
+보안/기능에 직접 영향은 없으나, 유지보수성과 일관성을 높이는 개선.
+
+| # | 항목 | 내용 |
+|---|------|------|
+| #92 | `UserDetailsServiceImpl` 더미 비밀번호 상수 추출 | `"dummy-password-for-timing-defense"` 가 2곳에 중복. `private static final String` 상수 추출 |
+| #93 | `PostService` → `UserRepository` 크로스 도메인 의존 | 규모 확대 시 Application Service 또는 인터페이스 분리 검토 |
+| #118 | `@Size(max = 500)` → `Post.MAX_CONTENT_LENGTH` 참조 | DTO 와 Entity 검증 값 동기화 |
+| #119 | `RestAuthSuccessHandler` inline Map → DTO 사용 | `UserResponse` 변경 시 동기화 누락 위험 제거 |
+| #120 | `AuthController` UserException 전체 catch | `NOT_FOUND` 만 catch 하거나 errorType 분기 |
+| #122 | `User.tokenVersion` 명시적 초기화 | `this.tokenVersion = 0` 가독성 개선 |
+
+### 16.4 우선순위 요약 + Phase 매핑
+
+```
+Phase 2.1 — 즉시 권장 (보안)
+  ├─ (1) TokenVersionFilter           [High]   ← 가장 시급
+  ├─ (2) 계정 삭제 세션 무효화         [Medium]
+  ├─ (3) FilterResponseUtils 안전화    [Medium]
+  ├─ (4) 감사 로그 injection 방어      [Medium]
+  ├─ (5) Pageable max-page-size        [Medium, 1줄]
+  ├─ (6) Cookie 보안 기본값            [Low, yaml 수정]
+  └─ (7) GlobalExceptionHandler catch-all [Low]
+
+Phase 2.2 — 비밀번호 강화
+  ├─ (8) 이력 재사용 금지 + 동일 변경 차단
+  └─ (9) Pwned Passwords 연동
+
+Phase 2.3 — 정보 보호 + 방어 고도화
+  ├─ (10) 회원가입 에러 메시지 통일
+  ├─ (11) H2 CSRF 면제 프로필 연동
+  ├─ (12) 계정 잠금
+  └─ (13) AuthUser 비밀번호 해시 제거
+
+Phase 2 기존 — 기능 확장
+  ├─ 이메일 인증 흐름 (#54)
+  ├─ 비밀번호 재설정 흐름 (#55)
+  ├─ 계정 정지 / 복원 (Admin)
+  └─ Remember-Me (#56)
+```
 
 ---
 
