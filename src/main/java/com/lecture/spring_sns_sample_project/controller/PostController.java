@@ -71,8 +71,7 @@ public class PostController {
 
   private static void requireAuth(AuthUser authUser) {
     if (authUser == null) {
-      throw new IllegalStateException(
-          "Authentication required — SecurityFilterChain 설정과 일치하지 않습니다.");
+      throw new org.springframework.security.access.AccessDeniedException("인증이 필요합니다.");
     }
   }
 }
