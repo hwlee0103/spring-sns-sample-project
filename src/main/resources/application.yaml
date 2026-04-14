@@ -9,6 +9,19 @@ spring:
     redis:
       repository-type: indexed
       namespace: sns
+  data:
+    web:
+      pageable:
+        max-page-size: 100
+server:
+  servlet:
+    session:
+      cookie:
+        secure: true
+        http-only: true
+        same-site: lax
+  error:
+    include-stacktrace: never
 app:
   session:
     max-sessions-per-user: 3

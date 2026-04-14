@@ -4,10 +4,3 @@ spring:
       host: "${REDIS_HOST:localhost}"
       port: "${REDIS_PORT:6379}"
       password: "${REDIS_PASSWORD}"
-server:
-  servlet:
-    session:
-      cookie:
-        secure: true
-        http-only: true
-        same-site: lax
