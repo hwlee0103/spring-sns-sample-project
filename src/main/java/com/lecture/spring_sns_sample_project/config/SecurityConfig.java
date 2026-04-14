@@ -49,7 +49,8 @@ public class SecurityConfig {
       Environment env,
       AuthenticationManager authenticationManager,
       ObjectMapper objectMapper,
-      RateLimitProperties rateLimitProperties)
+      RateLimitProperties rateLimitProperties,
+      TokenVersionFilter tokenVersionFilter)
       throws Exception {
     boolean devProfile = Arrays.asList(env.getActiveProfiles()).contains("dev");
 
@@ -72,6 +73,7 @@ public class SecurityConfig {
         .addFilterBefore(
             rateLimitFilter(rateLimitProperties), UsernamePasswordAuthenticationFilter.class)
         .addFilterAfter(absoluteSessionTimeoutFilter(), ConcurrentSessionFilter.class)
+        .addFilterAfter(tokenVersionFilter, AbsoluteSessionTimeoutFilter.class)
         // formLogin 대신 커스텀 JSON 인증 필터 등록
         .addFilterAt(loginFilter, UsernamePasswordAuthenticationFilter.class)
         .sessionManagement(
@@ -175,6 +177,12 @@ public class SecurityConfig {
   @Bean
   public AbsoluteSessionTimeoutFilter absoluteSessionTimeoutFilter() {
     return new AbsoluteSessionTimeoutFilter(sessionProperties.absoluteTimeout());
+  }
+
+  @Bean
+  public TokenVersionFilter tokenVersionFilter(
+      com.lecture.spring_sns_sample_project.domain.user.UserRepository userRepository) {
+    return new TokenVersionFilter(userRepository);
   }
 
   @Bean
