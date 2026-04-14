@@ -1,5 +1,6 @@
 package com.lecture.spring_sns_sample_project.config;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -19,13 +20,10 @@ import org.springframework.session.security.SpringSessionBackedSessionRegistry;
  */
 @Configuration
 @ConditionalOnBean(FindByIndexNameSessionRepository.class)
+@RequiredArgsConstructor
 public class SessionConfig<S extends Session> {
 
   private final FindByIndexNameSessionRepository<S> sessionRepository;
-
-  public SessionConfig(FindByIndexNameSessionRepository<S> sessionRepository) {
-    this.sessionRepository = sessionRepository;
-  }
 
   @Bean
   public SpringSessionBackedSessionRegistry<S> sessionRegistry() {

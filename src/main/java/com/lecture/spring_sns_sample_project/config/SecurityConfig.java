@@ -6,6 +6,7 @@ import com.lecture.spring_sns_sample_project.config.security.RestAuthenticationF
 import jakarta.servlet.http.HttpServletResponse;
 import java.util.Arrays;
 import java.util.List;
+import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
@@ -36,15 +37,11 @@ import tools.jackson.databind.ObjectMapper;
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
+@RequiredArgsConstructor
 public class SecurityConfig {
 
   private final SessionRegistry sessionRegistry;
   private final AppSessionProperties sessionProperties;
-
-  public SecurityConfig(SessionRegistry sessionRegistry, AppSessionProperties sessionProperties) {
-    this.sessionRegistry = sessionRegistry;
-    this.sessionProperties = sessionProperties;
-  }
 
   @Bean
   public SecurityFilterChain securityFilterChain(
