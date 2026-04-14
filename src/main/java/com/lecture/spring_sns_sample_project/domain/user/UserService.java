@@ -71,6 +71,9 @@ public class UserService {
   public User update(Long id, String nickname) {
     validateNickname(nickname);
     User user = userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
+    if (!user.getNickname().equals(nickname) && userRepository.existsByNickname(nickname)) {
+      throw UserException.nicknameAlreadyExists(nickname);
+    }
     user.updateNickname(nickname);
     return user;
   }
