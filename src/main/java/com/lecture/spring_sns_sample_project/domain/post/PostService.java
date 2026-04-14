@@ -38,6 +38,12 @@ public class PostService {
 
   @Transactional
   public Post update(Long requesterId, Long id, String content) {
+    if (requesterId == null) {
+      throw PostException.invalidField("requesterId");
+    }
+    if (content == null || content.isBlank()) {
+      throw PostException.invalidField("content");
+    }
     Post post = getById(id);
     if (!post.isAuthor(requesterId)) {
       throw PostException.forbidden(id);
@@ -48,6 +54,9 @@ public class PostService {
 
   @Transactional
   public void delete(Long requesterId, Long id) {
+    if (requesterId == null) {
+      throw PostException.invalidField("requesterId");
+    }
     Post post = getById(id);
     if (!post.isAuthor(requesterId)) {
       throw PostException.forbidden(id);
