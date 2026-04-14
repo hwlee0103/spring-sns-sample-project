@@ -18,6 +18,10 @@ public class UserException extends DomainException {
     return new UserException(ErrorType.CONFLICT, "이미 존재하는 이메일입니다: " + email);
   }
 
+  public static UserException nicknameAlreadyExists(String nickname) {
+    return new UserException(ErrorType.CONFLICT, "이미 존재하는 닉네임입니다: " + nickname);
+  }
+
   public static UserException notFound(Long id) {
     return new UserException(ErrorType.NOT_FOUND, "존재하지 않는 사용자입니다: " + id);
   }
