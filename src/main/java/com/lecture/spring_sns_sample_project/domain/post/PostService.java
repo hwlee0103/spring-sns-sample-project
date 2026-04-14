@@ -16,8 +16,14 @@ public class PostService {
   private final UserRepository userRepository;
 
   public Post create(Long authorId, String content) {
+    if (authorId == null) {
+      throw PostException.invalidField("authorId");
+    }
+    if (content == null || content.isBlank()) {
+      throw PostException.invalidField("content");
+    }
     User author =
-        userRepository.findById(authorId).orElseThrow(() -> PostException.invalidField("author"));
+        userRepository.findById(authorId).orElseThrow(() -> PostException.authorNotFound(authorId));
     Post post = new Post(author, content);
     return postRepository.save(post);
   }

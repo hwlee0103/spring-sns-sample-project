@@ -17,6 +17,10 @@ public class PostException extends DomainException {
     return new PostException(ErrorType.BAD_REQUEST, fieldName + " 값이 비어 있을 수 없습니다.");
   }
 
+  public static PostException authorNotFound(Long authorId) {
+    return new PostException(ErrorType.NOT_FOUND, "존재하지 않는 작성자입니다: " + authorId);
+  }
+
   public static PostException contentTooLong() {
     return new PostException(
         ErrorType.BAD_REQUEST, "게시글 내용은 " + Post.MAX_CONTENT_LENGTH + "자를 초과할 수 없습니다.");

@@ -16,3 +16,4 @@ app:
   rate-limit:
     ip-requests-per-minute: 20
     max-buckets: 10000
+    bucket-expiry: 10m

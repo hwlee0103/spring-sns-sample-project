@@ -37,7 +37,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     this.ipBuckets =
         Caffeine.newBuilder()
             .maximumSize(properties.maxBuckets())
-            .expireAfterAccess(Duration.ofMinutes(10))
+            .expireAfterAccess(properties.bucketExpiry())
             .build();
   }
 
