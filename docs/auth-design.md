@@ -420,29 +420,198 @@ POST /api/auth/logout
 
 ### 9.2 비밀번호 정책 / 관리
 
-| 항목 | 권장 |
-|------|------|
-| 해싱 알고리즘 | **Argon2id** (현재 ✅) |
-| 평문 노출 | 절대 금지 (로그, 응답, DB 모두) |
-| 비밀번호 정책 | min 8, max 64, 단순 길이만. 복잡도 강제는 비권장 (NIST 800-63B) |
-| 비밀번호 변경 | 현재 비밀번호 재입력 필수 (TODO — 현재 미구현) |
-| 비밀번호 초과 시도 | rate limiting + 일시적 잠금 (TODO) |
-| Pwned Passwords 체크 | optional — `haveibeenpwned` API 또는 다운로드 list |
-| 2FA / TOTP | optional — `Google Authenticator` 호환, 추후 |
+| 항목 | 규칙 | 근거 | 상태 |
+|------|------|------|------|
+| 해싱 알고리즘 | **Argon2id** | PHC 우승, OWASP 1순위, memory-hard | ✅ |
+| 평문 노출 | 절대 금지 (로그, 응답, DB 모두) | OWASP 기본 원칙 | ✅ |
+| 최소 길이 | **8자** | NIST 800-63B §5.1.1 최소 요구 | ✅ |
+| 최대 길이 | **64자** | NIST 800-63B 최소 64자 허용 권장. Argon2 입력 제한 없음 | ✅ |
+| 복잡도 강제 | **비적용** (대문자/특수문자 등 강제 안 함) | NIST 800-63B — 복잡도 규칙이 예측 가능한 패턴(`P@ssw0rd!`)을 유도하여 오히려 보안 약화 | ✅ |
+| 현재 비밀번호 재확인 | 변경 시 필수 | 세션 탈취 시 비밀번호 변경 방지 | ✅ |
+| 현재 비밀번호와 동일 금지 | 새 비밀번호 ≠ 현재 비밀번호 | 무의미한 변경 방지 + tokenVersion 불필요 증가 방지 | 설계 완료 |
+| 최근 비밀번호 재사용 금지 | 최근 **3개** 와 동일 금지 | 순환 사용 방지 (NIST는 강제하지 않으나, KISA/금융권 권장) | 설계 완료 |
+| 유출 비밀번호 차단 | **Pwned Passwords** API 연동 | NIST 800-63B §5.1.1.2 — 유출 목록 대조 "SHALL" | 설계 완료 |
+| 주기적 변경 강제 | **비적용** | NIST 800-63B — 정기 강제 변경은 약한 비밀번호 선택 유도. 유출 시에만 변경 | — |
+| 비밀번호 초과 시도 | rate limiting + 계정 잠금 | brute force 방어 | 일부 ✅ (rate limit) |
+| 2FA / TOTP | optional | Google Authenticator 호환 | 향후 |
 
-### 신규 권장 사항 (현재 미적용)
+### 9.3 비밀번호 변경 규칙 — 상세 설계
+
+#### 9.3.1 규칙 요약
+
+비밀번호 변경(`PUT /api/user/{id}/password`) 시 다음 규칙을 **순서대로** 검증한다:
+
+```
+1. 현재 비밀번호 재확인           → 불일치 시 401 (invalidCredentials)
+2. 새 비밀번호 길이 검증          → 8~64자 위반 시 400 (invalidField)
+3. 현재 비밀번호와 동일 여부      → 동일 시 400 (samePassword)
+4. 최근 3개 비밀번호 재사용 여부  → 일치 시 400 (recentlyUsedPassword)
+5. 유출 비밀번호 차단 (optional)  → Pwned Passwords 해당 시 400 (compromisedPassword)
+```
+
+#### 9.3.2 비밀번호 이력 관리 (Password History)
+
+**목적**: 사용자가 비밀번호를 A → B → A 로 순환 사용하는 것을 방지.
+
+**설계 근거 — 이력 보관 개수 선택**
+
+| 보관 개수 | 장점 | 단점 |
+|----------|------|------|
+| 1 (현재만) | 구현 최소 | 순환 사용 방지 불가 |
+| **3 (권장)** | 순환 방지 + 저장 부담 적음 | — |
+| 5 (금융권) | 강력한 재사용 방지 | SNS 서비스에는 과도 |
+| 24 (Windows AD) | 엔터프라이즈 수준 | 과잉. 사용자 불편 극대화 |
+
+> **NIST 800-63B 는 비밀번호 이력 강제를 명시적으로 권장하지 않는다** (주기적 변경 강제와 함께 비권장).
+> 그러나 KISA 개인정보보호 가이드와 금융감독원 권고에서는 최근 N개 재사용 금지를 권장한다.
+> 본 프로젝트는 **3개**를 채택한다 — SNS 서비스의 보안/UX 균형점.
+
+**데이터 모델**
 
 ```java
-// UserService.update — 비밀번호 변경 시 현재 비밀번호 재확인
-public User updatePassword(Long id, String currentRawPassword, String newRawPassword) {
-  User user = getById(id);
-  if (!passwordEncoder.matches(currentRawPassword, user.getPassword())) {
-    throw UserException.invalidCredentials();
-  }
-  // ... (newRawPassword 검증, 인코딩, user.update)
-  // 비밀번호 변경 후 token version bump → 다른 디바이스 세션 자동 무효화
-  user.bumpTokenVersion();
+@Entity
+@Table(name = "password_history")
+public class PasswordHistory {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "user_id", nullable = false,
+        foreignKey = @ForeignKey(value = ConstraintMode.NO_CONSTRAINT))
+    private User user;
+
+    @Column(nullable = false)
+    private String encodedPassword;   // Argon2 해시
+
+    @Column(nullable = false)
+    private Instant createdAt;
+
+    protected PasswordHistory() {}
+
+    public PasswordHistory(User user, String encodedPassword) {
+        this.user = user;
+        this.encodedPassword = encodedPassword;
+        this.createdAt = Instant.now();
+    }
 }
+```
+
+**Repository**
+
+```java
+public interface PasswordHistoryRepository extends JpaRepository<PasswordHistory, Long> {
+
+    // 최근 N개 이력 조회 (최신순)
+    List<PasswordHistory> findTop3ByUserOrderByCreatedAtDesc(User user);
+
+    // 오래된 이력 정리 (보관 개수 초과분 삭제)
+    @Modifying
+    @Query("DELETE FROM PasswordHistory ph WHERE ph.user = :user AND ph.id NOT IN "
+         + "(SELECT ph2.id FROM PasswordHistory ph2 WHERE ph2.user = :user ORDER BY ph2.createdAt DESC LIMIT 3)")
+    void deleteOldEntries(@Param("user") User user);
+}
+```
+
+**변경 흐름**
+
+```
+UserService.changePassword(id, currentRaw, newRaw)
+  │
+  ├─ 1. validateRawPassword(currentRaw), validateRawPassword(newRaw)
+  ├─ 2. passwordEncoder.matches(currentRaw, user.password)  → 실패 시 invalidCredentials
+  ├─ 3. currentRaw.equals(newRaw)                           → 동일 시 samePassword
+  ├─ 4. passwordHistoryRepository.findTop3ByUser(user)
+  │     → 각 이력에 대해 passwordEncoder.matches(newRaw, history.encodedPassword)
+  │     → 일치하는 이력 있으면 recentlyUsedPassword
+  ├─ 5. (optional) pwnedPasswordsClient.isCompromised(newRaw)
+  │     → 유출 목록 해당 시 compromisedPassword
+  │
+  ├─ user.changePassword(encode(newRaw))  ← tokenVersion 자동 증가
+  ├─ passwordHistoryRepository.save(new PasswordHistory(user, user.password 의 이전값))
+  ├─ passwordHistoryRepository.deleteOldEntries(user)  ← 3개 초과분 정리
+  │
+  └─ refreshSecurityContext + invalidateOtherSessions
+```
+
+**성능 고려사항**
+
+| 항목 | 영향 | 대응 |
+|------|------|------|
+| `passwordEncoder.matches()` × 3회 (이력 검증) | 각 ~50ms (Argon2) → 총 ~150ms 추가 | 비밀번호 변경은 드문 작업. 수용 가능 |
+| `PasswordHistory` 테이블 크기 | 사용자당 최대 3행. 100만 사용자 = 300만 행 | 인덱스: `(user_id, created_at DESC)` |
+| 비밀번호 변경 시 DB 접근 | SELECT(이력 3건) + UPDATE(User) + INSERT(이력) + DELETE(초과분) | 단일 `@Transactional` 로 묶음 |
+
+#### 9.3.3 유출 비밀번호 차단 (Pwned Passwords) — optional
+
+**k-Anonymity 방식** (NIST 800-63B 준수):
+
+```
+1. 새 비밀번호의 SHA-1 해시 계산
+2. 해시 앞 5자리(prefix)만 haveibeenpwned API 로 전송
+3. API 가 해당 prefix 로 시작하는 해시 목록 반환
+4. 클라이언트에서 나머지 suffix 를 로컬 비교
+→ 비밀번호 원문이 외부로 전송되지 않음
+```
+
+```java
+// PwnedPasswordsClient (optional)
+public boolean isCompromised(String rawPassword) {
+    String sha1 = DigestUtils.sha1Hex(rawPassword).toUpperCase();
+    String prefix = sha1.substring(0, 5);
+    String suffix = sha1.substring(5);
+
+    // GET https://api.pwnedpasswords.com/range/{prefix}
+    String response = restClient.get()
+        .uri("https://api.pwnedpasswords.com/range/{prefix}", prefix)
+        .retrieve()
+        .body(String.class);
+
+    return response.lines()
+        .anyMatch(line -> line.startsWith(suffix));
+}
+```
+
+> **도입 시점**: Phase 2. 외부 API 의존성이므로 fallback(API 실패 시 통과) + circuit breaker 필요.
+> API 가 비가용 시 비밀번호 변경을 차단하면 안 됨 — availability > security 트레이드오프.
+
+#### 9.3.4 UserException 팩토리 메서드 추가
+
+```java
+// UserException — 비밀번호 변경 관련 추가 팩토리
+public static UserException samePassword() {
+    return new UserException(ErrorType.BAD_REQUEST,
+        "새 비밀번호는 현재 비밀번호와 달라야 합니다.");
+}
+
+public static UserException recentlyUsedPassword() {
+    return new UserException(ErrorType.BAD_REQUEST,
+        "최근 사용한 비밀번호는 재사용할 수 없습니다.");
+}
+
+public static UserException compromisedPassword() {
+    return new UserException(ErrorType.BAD_REQUEST,
+        "유출된 비밀번호입니다. 다른 비밀번호를 사용해주세요.");
+}
+```
+
+#### 9.3.5 비밀번호 규칙 권장 기준 — 참고 문헌 비교
+
+| 기준 | NIST 800-63B | OWASP | KISA | 본 프로젝트 |
+|------|-------------|-------|------|-----------|
+| 최소 길이 | 8자 (SHALL) | 8자 | 8자 | **8자** |
+| 최대 길이 | 최소 64자 허용 (SHALL) | 128자 | — | **64자** |
+| 복잡도 강제 | 금지 (SHALL NOT) | 비권장 | 2종류 이상 | **비적용** (NIST 준수) |
+| 주기적 변경 | 금지 (SHALL NOT) | 비권장 | 90일 | **비적용** (NIST 준수) |
+| 유출 목록 대조 | 필수 (SHALL) | 권장 | — | **설계 완료** (Phase 2) |
+| 이력 재사용 금지 | 명시 없음 | 권장 | 최근 2개 | **최근 3개** |
+| 현재 비밀번호 확인 | — | 필수 | 필수 | **적용 ✅** |
+| 동일 비밀번호 변경 금지 | — | 권장 | — | **설계 완료** |
+
+> **NIST "SHALL NOT" 규칙을 준수한다**: 복잡도 강제, 주기적 변경 강제는 적용하지 않는다.
+> 이는 사용자가 `P@ssw0rd1!` → `P@ssw0rd2!` 같은 예측 가능한 패턴을 만들게 하여 보안을 약화시킨다는
+> 연구 결과(Carnavalet & Mannan, 2014)에 기반한다.
 ```
 
 ---
