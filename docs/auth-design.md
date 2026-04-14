@@ -11,7 +11,7 @@
 |------|------|-----------|
 | 메커니즘 | Spring Security 6 + **Spring Session Redis** (`RedisIndexedSessionRepository`) | 04-13 |
 | 비밀번호 해싱 | Argon2id (`Argon2Password4jPasswordEncoder` — password4j 1.8.2) | 04-12 |
-| Principal | 커스텀 `AuthUser`(id/email/nickname/tokenVersion, `Serializable`) — `UserDetailsServiceImpl` 가 로드 | 04-13 |
+| Principal | 커스텀 `AuthUser`(id/email/nickname/role/tokenVersion, `Serializable`, **비밀번호 미저장**) | 04-14 |
 | 세션 저장소 | **Redis** (`spring-boot-starter-session-data-redis`, namespace `sns`) | 04-13 |
 | 세션 레지스트리 | `SpringSessionBackedSessionRegistry` — 다중 인스턴스 세션 관리 | 04-13 |
 | 동시 세션 제어 | `maximumSessions(3)` + `CompositeSessionAuthenticationStrategy` — 초과 시 최오래 세션 만료 | 04-13 |
@@ -21,13 +21,13 @@
 | 로그인 | `POST /api/auth/login` — `RestAuthenticationFilter` (JSON body, `MediaType` 호환 검증) | 04-13 |
 | 비밀번호 변경 | `PUT /api/user/{id}/password` — 현재 비밀번호 재확인 + `User.changePassword()` (tokenVersion 자동 증가) + Redis 세션 즉시 삭제 | 04-13 |
 | 프로필 수정 | `PUT /api/user/{id}` — **nickname만 변경** (password 필드 제거, 비밀번호 변경 백도어 차단) | 04-13 |
-| token version | `User.tokenVersion` + `AuthUser.tokenVersion` → `/api/auth/me` 에서 비교, 불일치 시 세션 무효화 + Redis 즉시 삭제 (fallback) | 04-13 |
+| token version | `User.tokenVersion` + `AuthUser.tokenVersion` → **`TokenVersionFilter`** 로 매 요청 검증 (Caffeine 30초 TTL) + Redis 즉시 삭제 | 04-14 |
 | 현재 사용자 | `GET /api/auth/me` (`@AuthenticationPrincipal AuthUser`) + null 방어 + tokenVersion 검증 | 04-13 |
 | 로그아웃 | `POST /api/auth/logout` (Spring Security `logout()` DSL) | 04-11 |
 | 인가 (IDOR 방어) | `requireOwnership(authUser, id)` — PUT/DELETE /api/user/{id} 본인 검증 | 04-13 |
 | Rate limiting | `RateLimitFilter` (Bucket4j + **Caffeine 캐시**) — IP 기반 분당 20회, XFF 불신, 개별 eviction | 04-13 |
-| Audit log | `AuthEventListener` — 로그인 성공/실패/로그아웃 + **세션 생성/삭제/만료** 이벤트 감사 로깅 (세션 ID 축약) | 04-13 |
-| 운영 cookie | `application-prod.yaml` — secure, http-only, same-site lax | 04-12 |
+| Audit log | `AuthEventListener` — 로그인 성공/실패/로그아웃 + 세션 이벤트 감사 로깅 (세션 ID 축약, **로그 injection 방어**) | 04-14 |
+| Cookie 보안 | `application.yaml` (base) — `secure: true`, `http-only: true`, `same-site: lax` 기본값. dev 에서만 `secure: false` 완화 | 04-14 |
 | HTTPS 강제 | `SecurityConfig` — prod 프로필에서만 `requiresChannel().requiresSecure()` | 04-12 |
 | CSP 헤더 | `Content-Security-Policy: default-src 'self'; script-src 'self'` | 04-12 |
 | H2 콘솔 제한 | `SecurityConfig` — dev 프로필에서만 접근 허용 (`AuthorizationDecision`) | 04-13 |
@@ -36,6 +36,10 @@
 | 타이밍 공격 방어 | `UserDetailsServiceImpl` 가 더미 hash `passwordEncoder.matches` 호출 | 04-11 |
 | 설정 외부화 | `AppSessionProperties`, `RateLimitProperties` — `@ConfigurationProperties` record | 04-13 |
 | Role 기반 인가 | `Role` enum (`USER`, `ADMIN`) + `AuthUser.getAuthorities()` + `@EnableMethodSecurity` + `/api/admin/**` hasRole | 04-13 |
+| Pageable 상한 | `spring.data.web.pageable.max-page-size=100` — OOM DoS 방지 | 04-14 |
+| catch-all 핸들러 | `GlobalExceptionHandler` — `@ExceptionHandler(Exception.class)` + `include-stacktrace: never` | 04-14 |
+| 에러 메시지 안전화 | 예외 메시지에서 email/ID 등 민감 식별자 제거 — 계정 열거 차단 | 04-14 |
+| 민감 정보 노출 방지 | [§17. 민감 정보 노출 방지 정책](#17-민감-정보-노출-방지-정책) — 캐시/쿠키/토큰/에러 4관점 감사 완료 | 04-14 |
 
 ---
 
@@ -1417,9 +1421,9 @@ UserController.changePassword()
 > **본 프로젝트는 단일 웹 클라이언트 + 단일 백엔드 구조이므로, Session-based 인증이 가장 단순하고 안전하며 운영 비용이 낮다.
 > JWT 는 모바일/외부 통합/단기 1회용 토큰 등 명확한 목적이 있을 때 한정해서 도입한다.**
 >
-> **Phase 0 (기본 인증) + Phase 1 (보안 강화) + Phase 1.5 (Redis 세션 관리 + 보안 취약점 수정) 모두 완료.**
-> Phase 2 Role 도입 완료. 해커 관점 리뷰 3회 + 코드 리뷰 5회에서 발견된 이슈 중 Critical 3건 + Warning 17건을 수정함.
-> 잔여 개선 사항 13건은 §16 에 우선순위별 정리. 다음 단계는 Phase 2.1 (TokenVersionFilter + 보안 강화).
+> **Phase 0~1.5 + Phase 2.1 (보안 강화) 모두 완료.** Phase 2 Role 도입 완료.
+> 해커 관점 리뷰 3회 + 코드 리뷰 5회 + 민감 정보 감사 1회에서 발견된 이슈 중 Critical 3건 + High 1건 + Warning/Medium 20건+ 을 수정함.
+> 다음 단계는 Phase 2.2 (비밀번호 이력 재사용 금지 + Pwned Passwords).
 
 ---
 
@@ -1428,9 +1432,9 @@ UserController.changePassword()
 > 해커 관점 리뷰 3회(Review #7, #9, #12) + 코드 리뷰 5회(Review #8, #10, #11)에서 도출된 미해결 항목을 통합 정리한다.
 > 우선순위는 **공격 가능성 × 피해 규모**로 결정하며, 구현 시 Phase 로드맵과 연계한다.
 
-### 16.1 즉시 권장 — 보안 강화 (Phase 2.1)
+### 16.1 즉시 권장 — 보안 강화 ✅ (Phase 2.1, 2026-04-14 완료)
 
-운영 전 반드시 적용해야 하는 보안 개선 사항.
+운영 전 반드시 적용해야 하는 보안 개선 사항. **전건 완료.**
 
 #### (1) TokenVersionFilter — 매 요청 세션 유효성 검증 [High, #123]
 
@@ -1527,13 +1531,9 @@ SNS 서비스 확장에 필요한 기능 단위 개선 사항.
 | **구현** | Redis 에 `login_failures:{email}` 카운터 (TTL 15분). 5회 초과 시 30분 임시 잠금. `AuthenticationFailureEvent` 에서 카운터 증가, 성공 시 리셋 |
 | **주의** | 잠금 자체가 DoS 벡터가 될 수 있음 — CAPTCHA 도입이 더 안전한 대안 |
 
-#### (13) AuthUser Redis 직렬화에서 비밀번호 해시 제거 [Medium, #102]
+#### ~~(13) AuthUser Redis 직렬화에서 비밀번호 해시 제거~~ ✅ (Phase 2.1에서 완료, #102)
 
-| 항목 | 내용 |
-|------|------|
-| **문제** | `AuthUser.password` 가 Redis 세션에 직렬화됨. Redis 접근 시 모든 활성 사용자의 Argon2 해시 노출 |
-| **구현** | `AuthUser.from(User)` 에서 password 를 `null` 로 설정. 인증 시에만 필요하고, 세션 저장 후에는 불필요 |
-| **영향** | `refreshSecurityContext()` 에서 `newAuthUser.getPassword()` 사용 부분 수정 필요 |
+`AuthUser` 에서 password 필드 완전 제거. `getPassword()` → null 반환. `serialVersionUID` 2L 로 변경. 2026-04-14 완료.
 
 ### 16.3 코드 품질 개선 (Suggestion)
 
@@ -1551,24 +1551,25 @@ SNS 서비스 확장에 필요한 기능 단위 개선 사항.
 ### 16.4 우선순위 요약 + Phase 매핑
 
 ```
-Phase 2.1 — 즉시 권장 (보안)
-  ├─ (1) TokenVersionFilter           [High]   ← 가장 시급
-  ├─ (2) 계정 삭제 세션 무효화         [Medium]
-  ├─ (3) FilterResponseUtils 안전화    [Medium]
-  ├─ (4) 감사 로그 injection 방어      [Medium]
-  ├─ (5) Pageable max-page-size        [Medium, 1줄]
-  ├─ (6) Cookie 보안 기본값            [Low, yaml 수정]
-  └─ (7) GlobalExceptionHandler catch-all [Low]
+Phase 2.1 — 즉시 권장 (보안) ✅ 전건 완료
+  ├─ ✅ (1) TokenVersionFilter           [High]
+  ├─ ✅ (2) 계정 삭제 세션 무효화         [Medium]
+  ├─ ✅ (3) FilterResponseUtils 안전화    [Medium]
+  ├─ ✅ (4) 감사 로그 injection 방어      [Medium]
+  ├─ ✅ (5) Pageable max-page-size        [Medium]
+  ├─ ✅ (6) Cookie 보안 기본값            [Low]
+  ├─ ✅ (7) GlobalExceptionHandler catch-all [Low]
+  ├─ ✅ (13) AuthUser 비밀번호 해시 제거  [Medium, 민감 정보 감사에서 발견]
+  └─ ✅ 에러 메시지 민감 식별자 제거      [Medium, #72 #125]
 
-Phase 2.2 — 비밀번호 강화
+Phase 2.2 — 비밀번호 강화 (다음)
   ├─ (8) 이력 재사용 금지 + 동일 변경 차단
   └─ (9) Pwned Passwords 연동
 
-Phase 2.3 — 정보 보호 + 방어 고도화
+Phase 2.3 — 방어 고도화
   ├─ (10) 회원가입 에러 메시지 통일
   ├─ (11) H2 CSRF 면제 프로필 연동
-  ├─ (12) 계정 잠금
-  └─ (13) AuthUser 비밀번호 해시 제거
+  └─ (12) 계정 잠금
 
 Phase 2 기존 — 기능 확장
   ├─ 이메일 인증 흐름 (#54)
@@ -1576,6 +1577,60 @@ Phase 2 기존 — 기능 확장
   ├─ 계정 정지 / 복원 (Admin)
   └─ Remember-Me (#56)
 ```
+
+---
+
+## 17. 민감 정보 노출 방지 정책
+
+> 캐시, 쿠키, 토큰, 에러 처리 4개 관점에서 민감 정보 노출을 점검하고 방어 원칙을 정립한다.
+> 2026-04-14 감사 완료.
+
+### 17.1 캐시 (Redis Session + Caffeine)
+
+| 항목 | 상태 | 조치 |
+|------|------|------|
+| **AuthUser password hash** → Redis 직렬화 | ✅ **제거 완료** | `AuthUser` 에서 password 필드 제거. `getPassword()` → null. `serialVersionUID` 2L |
+| AuthUser email → Redis 직렬화 | 수용 | `getUsername()` + `findByPrincipalName()` 에 필요. Redis 접근 제어 + 암호화로 보호 |
+| Caffeine (TokenVersionFilter) | 안전 | `userId → tokenVersion` (int). 민감하지 않음 |
+| Caffeine (RateLimitFilter) | 안전 | `"ip:" + remoteAddr → Bucket`. IP 만 키로 사용 |
+
+**원칙**: Redis 세션에는 **인증 후 필요한 최소 정보만** 직렬화한다. 비밀번호 해시, 결제 정보, 개인 식별 번호는 절대 포함하지 않는다.
+
+### 17.2 쿠키
+
+| 항목 | 상태 | 조치 |
+|------|------|------|
+| Session cookie `Secure` | ✅ base yaml 기본값 `true` | dev 에서만 `false` 완화 |
+| Session cookie `HttpOnly` | ✅ base yaml 기본값 `true` | JS 접근 차단 |
+| Session cookie `SameSite` | ✅ base yaml 기본값 `Lax` | 크로스 사이트 요청 시 쿠키 미전송 |
+| CSRF cookie `HttpOnly` | `false` (의도적) | SPA 가 JS 로 읽어 `X-XSRF-TOKEN` 헤더 첨부. `XorCsrfTokenRequestAttributeHandler` 로 BREACH 완화 |
+| Set-Cookie 에 민감 정보 | 없음 | 세션 ID 만 포함 |
+
+**원칙**: 쿠키 보안 플래그는 **base config 에서 restrictive 기본값**을 설정하고, dev 에서만 최소한으로 완화한다. 배포 실수로 보안이 누락되지 않도록 "기본값이 안전" 패턴을 따른다.
+
+### 17.3 토큰
+
+| 항목 | 상태 | 조치 |
+|------|------|------|
+| `tokenVersion` HTTP 응답 | ✅ 미포함 | `UserResponse`, `UserSummaryResponse`, `RestAuthSuccessHandler` 모두 미포함 |
+| `AuthUser.getPassword()` HTTP 응답 | ✅ 미포함 | 응답 DTO 에 password 필드 없음. `getPassword()` → null |
+| CSRF 토큰 | 쿠키에만 노출 (의도적) | 응답 body 에 미포함 |
+| Role | 인증 응답에만 포함 | 공개 엔드포인트는 `UserSummaryResponse` (role 미포함) |
+
+**원칙**: 내부 상태(tokenVersion, password hash)는 **어떤 HTTP 응답에도 포함하지 않는다**. Role 은 본인 인증 경로에서만 노출한다.
+
+### 17.4 에러 처리
+
+| 항목 | 상태 | 조치 |
+|------|------|------|
+| 스택트레이스 | ✅ 미노출 | `server.error.include-stacktrace=never` + catch-all 핸들러 |
+| email in 에러 메시지 | ✅ **제거 완료** | `"이미 존재하는 이메일입니다."` (값 미포함) |
+| entity ID in 에러 메시지 | ✅ **제거 완료** | `"존재하지 않는 사용자입니다."` (ID 미포함) |
+| 인증 실패 메시지 | ✅ 일반화 | `"이메일 또는 비밀번호가 올바르지 않습니다."` — 어느 쪽이 틀렸는지 미노출 |
+| 감사 로그 injection | ✅ 방어 완료 | `sanitize()` 로 `\r\n\t` → `_` 치환 |
+| 미처리 예외 | ✅ catch-all | `"서버 오류가 발생했습니다."` — 내부 정보 미노출 |
+
+**원칙**: 에러 메시지에는 **사용자가 입력한 값을 그대로 반환하지 않는다**. 내부 식별자(ID, email)를 메시지에 포함하면 열거 공격 벡터가 된다. 모든 예외는 일반 메시지로 응답하고, 상세 정보는 서버 로그에만 기록한다.
 
 ---
 
