@@ -10,7 +10,7 @@ public class PostException extends DomainException {
   }
 
   public static PostException notFound(Long id) {
-    return new PostException(ErrorType.NOT_FOUND, "존재하지 않는 게시글입니다: " + id);
+    return new PostException(ErrorType.NOT_FOUND, "존재하지 않는 게시글입니다.");
   }
 
   public static PostException invalidField(String fieldName) {
@@ -18,7 +18,7 @@ public class PostException extends DomainException {
   }
 
   public static PostException authorNotFound(Long authorId) {
-    return new PostException(ErrorType.NOT_FOUND, "존재하지 않는 작성자입니다: " + authorId);
+    return new PostException(ErrorType.NOT_FOUND, "존재하지 않는 작성자입니다.");
   }
 
   public static PostException contentTooLong() {
@@ -27,6 +27,6 @@ public class PostException extends DomainException {
   }
 
   public static PostException forbidden(Long id) {
-    return new PostException(ErrorType.FORBIDDEN, "게시글에 대한 권한이 없습니다: " + id);
+    return new PostException(ErrorType.FORBIDDEN, "게시글에 대한 권한이 없습니다.");
   }
 }
