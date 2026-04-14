@@ -155,8 +155,7 @@ public class UserController {
       User updatedUser, HttpServletRequest request, HttpServletResponse response) {
     AuthUser newAuthUser = AuthUser.from(updatedUser);
     UsernamePasswordAuthenticationToken newAuth =
-        new UsernamePasswordAuthenticationToken(
-            newAuthUser, newAuthUser.getPassword(), newAuthUser.getAuthorities());
+        new UsernamePasswordAuthenticationToken(newAuthUser, null, newAuthUser.getAuthorities());
     SecurityContext context = SecurityContextHolder.createEmptyContext();
     context.setAuthentication(newAuth);
     SecurityContextHolder.setContext(context);
