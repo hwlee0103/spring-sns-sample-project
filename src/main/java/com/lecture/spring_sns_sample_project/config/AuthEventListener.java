@@ -23,13 +23,12 @@ public class AuthEventListener {
 
   @EventListener
   public void onSuccess(AuthenticationSuccessEvent event) {
-    String username = event.getAuthentication().getName();
-    audit.info("LOGIN_SUCCESS user={}", username);
+    audit.info("LOGIN_SUCCESS user={}", sanitize(event.getAuthentication().getName()));
   }
 
   @EventListener
   public void onFailure(AbstractAuthenticationFailureEvent event) {
-    String username = event.getAuthentication().getName();
+    String username = sanitize(event.getAuthentication().getName());
     String reason = event.getException().getClass().getSimpleName();
     audit.warn("LOGIN_FAILURE user={} reason={}", username, reason);
   }
@@ -37,7 +36,9 @@ public class AuthEventListener {
   @EventListener
   public void onLogout(LogoutSuccessEvent event) {
     String username =
-        event.getAuthentication() != null ? event.getAuthentication().getName() : "unknown";
+        event.getAuthentication() != null
+            ? sanitize(event.getAuthentication().getName())
+            : "unknown";
     audit.info("LOGOUT user={}", username);
   }
 
@@ -54,6 +55,14 @@ public class AuthEventListener {
   @EventListener
   public void onSessionExpired(SessionExpiredEvent event) {
     audit.info("SESSION_EXPIRED sessionId={}", truncateSessionId(event.getSessionId()));
+  }
+
+  /** 로그 injection 방어 — 개행/탭 문자를 제거하여 가짜 로그 라인 삽입을 차단. */
+  private static String sanitize(String input) {
+    if (input == null) {
+      return "null";
+    }
+    return input.replaceAll("[\\r\\n\\t]", "_");
   }
 
   /** 세션 ID 전체 노출은 로그 유출 시 세션 하이재킹 벡터가 된다. 앞 8자만 기록. */

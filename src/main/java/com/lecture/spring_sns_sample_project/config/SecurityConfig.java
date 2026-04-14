@@ -6,12 +6,14 @@ import com.lecture.spring_sns_sample_project.config.security.RestAuthenticationF
 import jakarta.servlet.http.HttpServletResponse;
 import java.util.Arrays;
 import java.util.List;
+import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -34,15 +36,12 @@ import tools.jackson.databind.ObjectMapper;
 
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity
+@RequiredArgsConstructor
 public class SecurityConfig {
 
   private final SessionRegistry sessionRegistry;
   private final AppSessionProperties sessionProperties;
-
-  public SecurityConfig(SessionRegistry sessionRegistry, AppSessionProperties sessionProperties) {
-    this.sessionRegistry = sessionRegistry;
-    this.sessionProperties = sessionProperties;
-  }
 
   @Bean
   public SecurityFilterChain securityFilterChain(
@@ -50,7 +49,8 @@ public class SecurityConfig {
       Environment env,
       AuthenticationManager authenticationManager,
       ObjectMapper objectMapper,
-      RateLimitProperties rateLimitProperties)
+      RateLimitProperties rateLimitProperties,
+      TokenVersionFilter tokenVersionFilter)
       throws Exception {
     boolean devProfile = Arrays.asList(env.getActiveProfiles()).contains("dev");
 
@@ -73,6 +73,7 @@ public class SecurityConfig {
         .addFilterBefore(
             rateLimitFilter(rateLimitProperties), UsernamePasswordAuthenticationFilter.class)
         .addFilterAfter(absoluteSessionTimeoutFilter(), ConcurrentSessionFilter.class)
+        .addFilterAfter(tokenVersionFilter, AbsoluteSessionTimeoutFilter.class)
         // formLogin 대신 커스텀 JSON 인증 필터 등록
         .addFilterAt(loginFilter, UsernamePasswordAuthenticationFilter.class)
         .sessionManagement(
@@ -85,12 +86,11 @@ public class SecurityConfig {
                     .maximumSessions(sessionProperties.maxSessionsPerUser())
                     .sessionRegistry(sessionRegistry)
                     .expiredSessionStrategy(
-                        event -> {
-                          var response = event.getResponse();
-                          response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                          response.setContentType("application/json;charset=UTF-8");
-                          response.getWriter().write("{\"message\":\"세션이 만료되었습니다.\"}");
-                        }))
+                        event ->
+                            FilterResponseUtils.writeJsonError(
+                                event.getResponse(),
+                                HttpServletResponse.SC_UNAUTHORIZED,
+                                "세션이 만료되었습니다.")))
         .authorizeHttpRequests(
             auth ->
                 auth.requestMatchers(HttpMethod.POST, "/api/user")
@@ -102,6 +102,8 @@ public class SecurityConfig {
                     .requestMatchers(
                         HttpMethod.GET, "/api/user", "/api/user/*", "/api/user/by-nickname/*")
                     .permitAll()
+                    .requestMatchers("/api/admin/**")
+                    .hasRole("ADMIN")
                     .requestMatchers("/h2-console/**")
                     .access(
                         (authentication, context) ->
@@ -175,6 +177,12 @@ public class SecurityConfig {
   @Bean
   public AbsoluteSessionTimeoutFilter absoluteSessionTimeoutFilter() {
     return new AbsoluteSessionTimeoutFilter(sessionProperties.absoluteTimeout());
+  }
+
+  @Bean
+  public TokenVersionFilter tokenVersionFilter(
+      com.lecture.spring_sns_sample_project.domain.user.UserRepository userRepository) {
+    return new TokenVersionFilter(userRepository);
   }
 
   @Bean

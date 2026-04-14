@@ -29,13 +29,20 @@ public class UserService {
     if (userRepository.existsByEmail(email)) {
       throw UserException.emailAlreadyExists(email);
     }
+    if (userRepository.existsByNickname(nickname)) {
+      throw UserException.nicknameAlreadyExists(nickname);
+    }
 
     User user = new User(email, passwordEncoder.encode(rawPassword), nickname);
     try {
       return userRepository.save(user);
     } catch (DataIntegrityViolationException e) {
-      // existsByEmail 과 save 사이 race condition 방어 — DB unique 제약으로 최종 보장
-      throw UserException.emailAlreadyExists(email);
+      // exists 체크와 save 사이 race condition 방어 — DB unique 제약으로 최종 보장
+      // email 또는 nickname 둘 중 어느 쪽인지 재확인
+      if (userRepository.existsByEmail(email)) {
+        throw UserException.emailAlreadyExists(email);
+      }
+      throw UserException.nicknameAlreadyExists(nickname);
     }
   }
 

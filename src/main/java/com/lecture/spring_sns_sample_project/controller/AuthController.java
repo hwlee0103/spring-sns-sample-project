@@ -8,6 +8,7 @@ import com.lecture.spring_sns_sample_project.domain.user.security.AuthUser;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -32,7 +33,7 @@ public class AuthController {
   public ResponseEntity<UserResponse> me(
       @AuthenticationPrincipal AuthUser authUser, HttpServletRequest httpRequest) {
     if (authUser == null) {
-      return ResponseEntity.status(401).build();
+      return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
     }
     try {
       User user = userService.getById(authUser.getId());
@@ -40,14 +41,14 @@ public class AuthController {
       // tokenVersion 비교 — 비밀번호 변경 등으로 version 이 올라갔으면 이 세션을 무효화
       if (authUser.getTokenVersion() != user.getTokenVersion()) {
         invalidateSession(httpRequest);
-        return ResponseEntity.status(401).build();
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
       }
 
       return ResponseEntity.ok(UserResponse.from(user));
     } catch (UserException e) {
       // 세션은 살아있지만 사용자가 DB 에서 삭제된 경우
       invalidateSession(httpRequest);
-      return ResponseEntity.status(401).build();
+      return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
     }
   }
 

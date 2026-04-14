@@ -4,6 +4,7 @@ import com.lecture.spring_sns_sample_project.controller.dto.ChangePasswordReques
 import com.lecture.spring_sns_sample_project.controller.dto.PageResponse;
 import com.lecture.spring_sns_sample_project.controller.dto.UserCreateRequest;
 import com.lecture.spring_sns_sample_project.controller.dto.UserResponse;
+import com.lecture.spring_sns_sample_project.controller.dto.UserSummaryResponse;
 import com.lecture.spring_sns_sample_project.controller.dto.UserUpdateRequest;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserService;
@@ -39,6 +40,7 @@ public class UserController {
   private final UserService userService;
   private final SecurityContextRepository securityContextRepository;
   private final FindByIndexNameSessionRepository<? extends Session> sessionRepository;
+  private final com.lecture.spring_sns_sample_project.config.TokenVersionFilter tokenVersionFilter;
 
   @PostMapping("/api/user")
   public ResponseEntity<UserResponse> register(@Valid @RequestBody UserCreateRequest request) {
@@ -48,22 +50,22 @@ public class UserController {
   }
 
   @GetMapping("/api/user/{id}")
-  public ResponseEntity<UserResponse> getUser(@PathVariable Long id) {
+  public ResponseEntity<UserSummaryResponse> getUser(@PathVariable Long id) {
     User user = userService.getById(id);
-    return ResponseEntity.ok(UserResponse.from(user));
+    return ResponseEntity.ok(UserSummaryResponse.from(user));
   }
 
   @GetMapping("/api/user/by-nickname/{nickname}")
-  public ResponseEntity<UserResponse> getUserByNickname(@PathVariable String nickname) {
+  public ResponseEntity<UserSummaryResponse> getUserByNickname(@PathVariable String nickname) {
     User user = userService.getByNickname(nickname);
-    return ResponseEntity.ok(UserResponse.from(user));
+    return ResponseEntity.ok(UserSummaryResponse.from(user));
   }
 
   @GetMapping("/api/user")
-  public ResponseEntity<PageResponse<UserResponse>> getUsers(
+  public ResponseEntity<PageResponse<UserSummaryResponse>> getUsers(
       @PageableDefault(size = 20, sort = "id", direction = Sort.Direction.DESC) Pageable pageable) {
-    PageResponse<UserResponse> response =
-        PageResponse.from(userService.getAll(pageable), UserResponse::from);
+    PageResponse<UserSummaryResponse> response =
+        PageResponse.from(userService.getAll(pageable), UserSummaryResponse::from);
     return ResponseEntity.ok(response);
   }
 
@@ -91,6 +93,9 @@ public class UserController {
     // 현재 세션의 AuthUser 를 새 tokenVersion 으로 갱신 — 본인 세션이 즉시 무효화되지 않도록
     refreshSecurityContext(updatedUser, httpRequest, httpResponse);
 
+    // TokenVersionFilter 캐시 즉시 무효화 → 다른 인스턴스에서도 30초 내 감지
+    tokenVersionFilter.evict(id);
+
     // Redis 에서 해당 사용자의 다른 디바이스 세션을 즉시 삭제
     invalidateOtherSessions(authUser.getEmail(), httpRequest.getSession().getId());
 
@@ -99,9 +104,22 @@ public class UserController {
 
   @DeleteMapping("/api/user/{id}")
   public ResponseEntity<Void> deleteUser(
-      @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
+      @PathVariable Long id,
+      @AuthenticationPrincipal AuthUser authUser,
+      HttpServletRequest httpRequest) {
     requireOwnership(authUser, id);
     userService.delete(id);
+
+    // 삭제된 계정의 모든 세션을 Redis 에서 즉시 제거
+    invalidateAllSessions(authUser.getEmail());
+
+    // 현재 세션도 무효화
+    jakarta.servlet.http.HttpSession session = httpRequest.getSession(false);
+    if (session != null) {
+      session.invalidate();
+    }
+    SecurityContextHolder.clearContext();
+
     return ResponseEntity.noContent().build();
   }
 
@@ -111,6 +129,13 @@ public class UserController {
       throw new org.springframework.security.access.AccessDeniedException(
           "본인의 리소스만 수정/삭제할 수 있습니다.");
     }
+  }
+
+  /** 계정 삭제 시 해당 사용자의 모든 세션을 Redis 에서 즉시 삭제. */
+  private void invalidateAllSessions(String email) {
+    sessionRepository
+        .findByPrincipalName(email)
+        .forEach((sessionId, session) -> sessionRepository.deleteById(sessionId));
   }
 
   /** 비밀번호 변경 시 현재 세션을 제외한 해당 사용자의 모든 세션을 Redis 에서 즉시 삭제. */
@@ -130,8 +155,7 @@ public class UserController {
       User updatedUser, HttpServletRequest request, HttpServletResponse response) {
     AuthUser newAuthUser = AuthUser.from(updatedUser);
     UsernamePasswordAuthenticationToken newAuth =
-        new UsernamePasswordAuthenticationToken(
-            newAuthUser, newAuthUser.getPassword(), newAuthUser.getAuthorities());
+        new UsernamePasswordAuthenticationToken(newAuthUser, null, newAuthUser.getAuthorities());
     SecurityContext context = SecurityContextHolder.createEmptyContext();
     context.setAuthentication(newAuth);
     SecurityContextHolder.setContext(context);

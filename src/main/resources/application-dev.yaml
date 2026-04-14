@@ -3,3 +3,8 @@ spring:
     redis:
       host: localhost
       port: 6379
+server:
+  servlet:
+    session:
+      cookie:
+        secure: false

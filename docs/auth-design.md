@@ -9,27 +9,37 @@
 
 | 항목 | 구현 | 적용 일자 |
 |------|------|-----------|
-| 메커니즘 | Spring Security 6 + `HttpSessionSecurityContextRepository` | 04-11 |
+| 메커니즘 | Spring Security 6 + **Spring Session Redis** (`RedisIndexedSessionRepository`) | 04-13 |
 | 비밀번호 해싱 | Argon2id (`Argon2Password4jPasswordEncoder` — password4j 1.8.2) | 04-12 |
-| Principal | 커스텀 `AuthUser`(id/email/tokenVersion) — `UserDetailsServiceImpl` 가 로드 | 04-11 |
-| 세션 ID | `JSESSIONID` (서버 메모리 저장) | 04-11 |
+| Principal | 커스텀 `AuthUser`(id/email/nickname/role/tokenVersion, `Serializable`, **비밀번호 미저장**) | 04-14 |
+| 세션 저장소 | **Redis** (`spring-boot-starter-session-data-redis`, namespace `sns`) | 04-13 |
+| 세션 레지스트리 | `SpringSessionBackedSessionRegistry` — 다중 인스턴스 세션 관리 | 04-13 |
+| 동시 세션 제어 | `maximumSessions(3)` + `CompositeSessionAuthenticationStrategy` — 초과 시 최오래 세션 만료 | 04-13 |
+| 세션 만료 | Sliding 30분 (`spring.session.timeout`) + Absolute 24시간 (`AbsoluteSessionTimeoutFilter`) | 04-13 |
 | 세션 고정 방어 | `ChangeSessionIdAuthenticationStrategy` — 로그인 시 세션 ID 재발급 | 04-11 |
 | CSRF | `CookieCsrfTokenRepository` + **`XorCsrfTokenRequestAttributeHandler`** (BREACH 완화) + `CsrfCookieFilter` | 04-12 |
-| 로그인 | `POST /api/auth/login` 수동 authenticate + 세션 저장 | 04-11 |
-| 비밀번호 변경 | `PUT /api/user/{id}/password` — 현재 비밀번호 재확인 + tokenVersion bump | 04-12 |
-| token version | `User.tokenVersion` + `AuthUser.tokenVersion` → `/api/auth/me` 에서 비교, 불일치 시 세션 무효화 | 04-12 |
-| 현재 사용자 | `GET /api/auth/me` (`@AuthenticationPrincipal AuthUser`) + tokenVersion 검증 | 04-11 |
+| 로그인 | `POST /api/auth/login` — `RestAuthenticationFilter` (JSON body, `MediaType` 호환 검증) | 04-13 |
+| 비밀번호 변경 | `PUT /api/user/{id}/password` — 현재 비밀번호 재확인 + `User.changePassword()` (tokenVersion 자동 증가) + Redis 세션 즉시 삭제 | 04-13 |
+| 프로필 수정 | `PUT /api/user/{id}` — **nickname만 변경** (password 필드 제거, 비밀번호 변경 백도어 차단) | 04-13 |
+| token version | `User.tokenVersion` + `AuthUser.tokenVersion` → **`TokenVersionFilter`** 로 매 요청 검증 (Caffeine 30초 TTL) + Redis 즉시 삭제 | 04-14 |
+| 현재 사용자 | `GET /api/auth/me` (`@AuthenticationPrincipal AuthUser`) + null 방어 + tokenVersion 검증 | 04-13 |
 | 로그아웃 | `POST /api/auth/logout` (Spring Security `logout()` DSL) | 04-11 |
 | 인가 (IDOR 방어) | `requireOwnership(authUser, id)` — PUT/DELETE /api/user/{id} 본인 검증 | 04-13 |
-| Rate limiting | `RateLimitFilter` (Bucket4j) — IP 기반 분당 20회, XFF 불신 | 04-12 |
-| Audit log | `AuthEventListener` — 로그인 성공/실패/로그아웃 이벤트 감사 로깅 | 04-12 |
-| 운영 cookie | `application-prod.yaml` — secure, http-only, same-site lax, timeout 30m | 04-12 |
+| Rate limiting | `RateLimitFilter` (Bucket4j + **Caffeine 캐시**) — IP 기반 분당 20회, XFF 불신, 개별 eviction | 04-13 |
+| Audit log | `AuthEventListener` — 로그인 성공/실패/로그아웃 + 세션 이벤트 감사 로깅 (세션 ID 축약, **로그 injection 방어**) | 04-14 |
+| Cookie 보안 | `application.yaml` (base) — `secure: true`, `http-only: true`, `same-site: lax` 기본값. dev 에서만 `secure: false` 완화 | 04-14 |
 | HTTPS 강제 | `SecurityConfig` — prod 프로필에서만 `requiresChannel().requiresSecure()` | 04-12 |
 | CSP 헤더 | `Content-Security-Policy: default-src 'self'; script-src 'self'` | 04-12 |
 | H2 콘솔 제한 | `SecurityConfig` — dev 프로필에서만 접근 허용 (`AuthorizationDecision`) | 04-13 |
 | 프론트 ↔ 백 | Next.js rewrites 로 same-origin 프록시, 쿠키 + XSRF-TOKEN 자동 첨부 | 04-11 |
 | 인증 예외 | `unauthorizedEntryPoint` 가 401 통일 + `AuthenticationException` 전체 catch | 04-11 |
 | 타이밍 공격 방어 | `UserDetailsServiceImpl` 가 더미 hash `passwordEncoder.matches` 호출 | 04-11 |
+| 설정 외부화 | `AppSessionProperties`, `RateLimitProperties` — `@ConfigurationProperties` record | 04-13 |
+| Role 기반 인가 | `Role` enum (`USER`, `ADMIN`) + `AuthUser.getAuthorities()` + `@EnableMethodSecurity` + `/api/admin/**` hasRole | 04-13 |
+| Pageable 상한 | `spring.data.web.pageable.max-page-size=100` — OOM DoS 방지 | 04-14 |
+| catch-all 핸들러 | `GlobalExceptionHandler` — `@ExceptionHandler(Exception.class)` + `include-stacktrace: never` | 04-14 |
+| 에러 메시지 안전화 | 예외 메시지에서 email/ID 등 민감 식별자 제거 — 계정 열거 차단 | 04-14 |
+| 민감 정보 노출 방지 | [§17. 민감 정보 노출 방지 정책](#17-민감-정보-노출-방지-정책) — 캐시/쿠키/토큰/에러 4관점 감사 완료 | 04-14 |
 
 ---
 
@@ -414,29 +424,198 @@ POST /api/auth/logout
 
 ### 9.2 비밀번호 정책 / 관리
 
-| 항목 | 권장 |
-|------|------|
-| 해싱 알고리즘 | **Argon2id** (현재 ✅) |
-| 평문 노출 | 절대 금지 (로그, 응답, DB 모두) |
-| 비밀번호 정책 | min 8, max 64, 단순 길이만. 복잡도 강제는 비권장 (NIST 800-63B) |
-| 비밀번호 변경 | 현재 비밀번호 재입력 필수 (TODO — 현재 미구현) |
-| 비밀번호 초과 시도 | rate limiting + 일시적 잠금 (TODO) |
-| Pwned Passwords 체크 | optional — `haveibeenpwned` API 또는 다운로드 list |
-| 2FA / TOTP | optional — `Google Authenticator` 호환, 추후 |
+| 항목 | 규칙 | 근거 | 상태 |
+|------|------|------|------|
+| 해싱 알고리즘 | **Argon2id** | PHC 우승, OWASP 1순위, memory-hard | ✅ |
+| 평문 노출 | 절대 금지 (로그, 응답, DB 모두) | OWASP 기본 원칙 | ✅ |
+| 최소 길이 | **8자** | NIST 800-63B §5.1.1 최소 요구 | ✅ |
+| 최대 길이 | **64자** | NIST 800-63B 최소 64자 허용 권장. Argon2 입력 제한 없음 | ✅ |
+| 복잡도 강제 | **비적용** (대문자/특수문자 등 강제 안 함) | NIST 800-63B — 복잡도 규칙이 예측 가능한 패턴(`P@ssw0rd!`)을 유도하여 오히려 보안 약화 | ✅ |
+| 현재 비밀번호 재확인 | 변경 시 필수 | 세션 탈취 시 비밀번호 변경 방지 | ✅ |
+| 현재 비밀번호와 동일 금지 | 새 비밀번호 ≠ 현재 비밀번호 | 무의미한 변경 방지 + tokenVersion 불필요 증가 방지 | 설계 완료 |
+| 최근 비밀번호 재사용 금지 | 최근 **3개** 와 동일 금지 | 순환 사용 방지 (NIST는 강제하지 않으나, KISA/금융권 권장) | 설계 완료 |
+| 유출 비밀번호 차단 | **Pwned Passwords** API 연동 | NIST 800-63B §5.1.1.2 — 유출 목록 대조 "SHALL" | 설계 완료 |
+| 주기적 변경 강제 | **비적용** | NIST 800-63B — 정기 강제 변경은 약한 비밀번호 선택 유도. 유출 시에만 변경 | — |
+| 비밀번호 초과 시도 | rate limiting + 계정 잠금 | brute force 방어 | 일부 ✅ (rate limit) |
+| 2FA / TOTP | optional | Google Authenticator 호환 | 향후 |
 
-### 신규 권장 사항 (현재 미적용)
+### 9.3 비밀번호 변경 규칙 — 상세 설계
+
+#### 9.3.1 규칙 요약
+
+비밀번호 변경(`PUT /api/user/{id}/password`) 시 다음 규칙을 **순서대로** 검증한다:
+
+```
+1. 현재 비밀번호 재확인           → 불일치 시 401 (invalidCredentials)
+2. 새 비밀번호 길이 검증          → 8~64자 위반 시 400 (invalidField)
+3. 현재 비밀번호와 동일 여부      → 동일 시 400 (samePassword)
+4. 최근 3개 비밀번호 재사용 여부  → 일치 시 400 (recentlyUsedPassword)
+5. 유출 비밀번호 차단 (optional)  → Pwned Passwords 해당 시 400 (compromisedPassword)
+```
+
+#### 9.3.2 비밀번호 이력 관리 (Password History)
+
+**목적**: 사용자가 비밀번호를 A → B → A 로 순환 사용하는 것을 방지.
+
+**설계 근거 — 이력 보관 개수 선택**
+
+| 보관 개수 | 장점 | 단점 |
+|----------|------|------|
+| 1 (현재만) | 구현 최소 | 순환 사용 방지 불가 |
+| **3 (권장)** | 순환 방지 + 저장 부담 적음 | — |
+| 5 (금융권) | 강력한 재사용 방지 | SNS 서비스에는 과도 |
+| 24 (Windows AD) | 엔터프라이즈 수준 | 과잉. 사용자 불편 극대화 |
+
+> **NIST 800-63B 는 비밀번호 이력 강제를 명시적으로 권장하지 않는다** (주기적 변경 강제와 함께 비권장).
+> 그러나 KISA 개인정보보호 가이드와 금융감독원 권고에서는 최근 N개 재사용 금지를 권장한다.
+> 본 프로젝트는 **3개**를 채택한다 — SNS 서비스의 보안/UX 균형점.
+
+**데이터 모델**
 
 ```java
-// UserService.update — 비밀번호 변경 시 현재 비밀번호 재확인
-public User updatePassword(Long id, String currentRawPassword, String newRawPassword) {
-  User user = getById(id);
-  if (!passwordEncoder.matches(currentRawPassword, user.getPassword())) {
-    throw UserException.invalidCredentials();
-  }
-  // ... (newRawPassword 검증, 인코딩, user.update)
-  // 비밀번호 변경 후 token version bump → 다른 디바이스 세션 자동 무효화
-  user.bumpTokenVersion();
+@Entity
+@Table(name = "password_history")
+public class PasswordHistory {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "user_id", nullable = false,
+        foreignKey = @ForeignKey(value = ConstraintMode.NO_CONSTRAINT))
+    private User user;
+
+    @Column(nullable = false)
+    private String encodedPassword;   // Argon2 해시
+
+    @Column(nullable = false)
+    private Instant createdAt;
+
+    protected PasswordHistory() {}
+
+    public PasswordHistory(User user, String encodedPassword) {
+        this.user = user;
+        this.encodedPassword = encodedPassword;
+        this.createdAt = Instant.now();
+    }
 }
+```
+
+**Repository**
+
+```java
+public interface PasswordHistoryRepository extends JpaRepository<PasswordHistory, Long> {
+
+    // 최근 N개 이력 조회 (최신순)
+    List<PasswordHistory> findTop3ByUserOrderByCreatedAtDesc(User user);
+
+    // 오래된 이력 정리 (보관 개수 초과분 삭제)
+    @Modifying
+    @Query("DELETE FROM PasswordHistory ph WHERE ph.user = :user AND ph.id NOT IN "
+         + "(SELECT ph2.id FROM PasswordHistory ph2 WHERE ph2.user = :user ORDER BY ph2.createdAt DESC LIMIT 3)")
+    void deleteOldEntries(@Param("user") User user);
+}
+```
+
+**변경 흐름**
+
+```
+UserService.changePassword(id, currentRaw, newRaw)
+  │
+  ├─ 1. validateRawPassword(currentRaw), validateRawPassword(newRaw)
+  ├─ 2. passwordEncoder.matches(currentRaw, user.password)  → 실패 시 invalidCredentials
+  ├─ 3. currentRaw.equals(newRaw)                           → 동일 시 samePassword
+  ├─ 4. passwordHistoryRepository.findTop3ByUser(user)
+  │     → 각 이력에 대해 passwordEncoder.matches(newRaw, history.encodedPassword)
+  │     → 일치하는 이력 있으면 recentlyUsedPassword
+  ├─ 5. (optional) pwnedPasswordsClient.isCompromised(newRaw)
+  │     → 유출 목록 해당 시 compromisedPassword
+  │
+  ├─ user.changePassword(encode(newRaw))  ← tokenVersion 자동 증가
+  ├─ passwordHistoryRepository.save(new PasswordHistory(user, user.password 의 이전값))
+  ├─ passwordHistoryRepository.deleteOldEntries(user)  ← 3개 초과분 정리
+  │
+  └─ refreshSecurityContext + invalidateOtherSessions
+```
+
+**성능 고려사항**
+
+| 항목 | 영향 | 대응 |
+|------|------|------|
+| `passwordEncoder.matches()` × 3회 (이력 검증) | 각 ~50ms (Argon2) → 총 ~150ms 추가 | 비밀번호 변경은 드문 작업. 수용 가능 |
+| `PasswordHistory` 테이블 크기 | 사용자당 최대 3행. 100만 사용자 = 300만 행 | 인덱스: `(user_id, created_at DESC)` |
+| 비밀번호 변경 시 DB 접근 | SELECT(이력 3건) + UPDATE(User) + INSERT(이력) + DELETE(초과분) | 단일 `@Transactional` 로 묶음 |
+
+#### 9.3.3 유출 비밀번호 차단 (Pwned Passwords) — optional
+
+**k-Anonymity 방식** (NIST 800-63B 준수):
+
+```
+1. 새 비밀번호의 SHA-1 해시 계산
+2. 해시 앞 5자리(prefix)만 haveibeenpwned API 로 전송
+3. API 가 해당 prefix 로 시작하는 해시 목록 반환
+4. 클라이언트에서 나머지 suffix 를 로컬 비교
+→ 비밀번호 원문이 외부로 전송되지 않음
+```
+
+```java
+// PwnedPasswordsClient (optional)
+public boolean isCompromised(String rawPassword) {
+    String sha1 = DigestUtils.sha1Hex(rawPassword).toUpperCase();
+    String prefix = sha1.substring(0, 5);
+    String suffix = sha1.substring(5);
+
+    // GET https://api.pwnedpasswords.com/range/{prefix}
+    String response = restClient.get()
+        .uri("https://api.pwnedpasswords.com/range/{prefix}", prefix)
+        .retrieve()
+        .body(String.class);
+
+    return response.lines()
+        .anyMatch(line -> line.startsWith(suffix));
+}
+```
+
+> **도입 시점**: Phase 2. 외부 API 의존성이므로 fallback(API 실패 시 통과) + circuit breaker 필요.
+> API 가 비가용 시 비밀번호 변경을 차단하면 안 됨 — availability > security 트레이드오프.
+
+#### 9.3.4 UserException 팩토리 메서드 추가
+
+```java
+// UserException — 비밀번호 변경 관련 추가 팩토리
+public static UserException samePassword() {
+    return new UserException(ErrorType.BAD_REQUEST,
+        "새 비밀번호는 현재 비밀번호와 달라야 합니다.");
+}
+
+public static UserException recentlyUsedPassword() {
+    return new UserException(ErrorType.BAD_REQUEST,
+        "최근 사용한 비밀번호는 재사용할 수 없습니다.");
+}
+
+public static UserException compromisedPassword() {
+    return new UserException(ErrorType.BAD_REQUEST,
+        "유출된 비밀번호입니다. 다른 비밀번호를 사용해주세요.");
+}
+```
+
+#### 9.3.5 비밀번호 규칙 권장 기준 — 참고 문헌 비교
+
+| 기준 | NIST 800-63B | OWASP | KISA | 본 프로젝트 |
+|------|-------------|-------|------|-----------|
+| 최소 길이 | 8자 (SHALL) | 8자 | 8자 | **8자** |
+| 최대 길이 | 최소 64자 허용 (SHALL) | 128자 | — | **64자** |
+| 복잡도 강제 | 금지 (SHALL NOT) | 비권장 | 2종류 이상 | **비적용** (NIST 준수) |
+| 주기적 변경 | 금지 (SHALL NOT) | 비권장 | 90일 | **비적용** (NIST 준수) |
+| 유출 목록 대조 | 필수 (SHALL) | 권장 | — | **설계 완료** (Phase 2) |
+| 이력 재사용 금지 | 명시 없음 | 권장 | 최근 2개 | **최근 3개** |
+| 현재 비밀번호 확인 | — | 필수 | 필수 | **적용 ✅** |
+| 동일 비밀번호 변경 금지 | — | 권장 | — | **설계 완료** |
+
+> **NIST "SHALL NOT" 규칙을 준수한다**: 복잡도 강제, 주기적 변경 강제는 적용하지 않는다.
+> 이는 사용자가 `P@ssw0rd1!` → `P@ssw0rd2!` 같은 예측 가능한 패턴을 만들게 하여 보안을 약화시킨다는
+> 연구 결과(Carnavalet & Mannan, 2014)에 기반한다.
 ```
 
 ---
@@ -507,18 +686,24 @@ server:
 7. ✅ **XorCsrfTokenRequestAttributeHandler** — BREACH 압축 공격 완화
 8. ✅ **Content-Security-Policy** — `default-src 'self'; script-src 'self'`
 
-### Phase 1.5 — Redis 세션 관리 (현재 진행)
-1. **Spring Session + Redis** — 세션 외부화 (`spring-boot-starter-session-data-redis`)
-2. **`RedisIndexedSessionRepository`** — principal 기반 세션 인덱스 (동시 세션 제어 + 일괄 무효화)
-3. **`SpringSessionBackedSessionRegistry`** — 다중 인스턴스 세션 레지스트리
-4. **`maximumSessions(3)`** — 사용자당 동시 세션 3개 (스마트폰/PC/태블릿)
-5. **Sliding Session (30분)** — idle timeout + absolute timeout (24시간) 보조
-6. **비밀번호 변경 시 즉시 세션 삭제** — `findByPrincipalName()` → 현재 세션 제외 일괄 삭제
+### Phase 1.5 — Redis 세션 관리 + 보안 강화 ✅ (2026-04-13 완료)
+1. ✅ **Spring Session + Redis** — 세션 외부화 (`spring-boot-starter-session-data-redis`)
+2. ✅ **`RedisIndexedSessionRepository`** — principal 기반 세션 인덱스 (`repository-type=indexed`)
+3. ✅ **`SpringSessionBackedSessionRegistry`** — 다중 인스턴스 세션 레지스트리 (`SessionConfig`)
+4. ✅ **`maximumSessions(3)`** — `CompositeSessionAuthenticationStrategy` + `ConcurrentSessionFilter`
+5. ✅ **Sliding Session (30분)** — `spring.session.timeout=30m` + `AbsoluteSessionTimeoutFilter` (24시간)
+6. ✅ **비밀번호 변경 시 즉시 세션 삭제** — `findByPrincipalName()` → 현재 세션 제외 일괄 삭제
+7. ✅ **프로필 수정/비밀번호 변경 분리** — `UserUpdateRequest` 에서 password 제거, 백도어 차단
+8. ✅ **Post fetch join** — `LazyInitializationException` 해결 + N+1 쿼리 제거
+9. ✅ **RateLimitFilter Caffeine 캐시** — 전체 clear → 개별 eviction, dead code 정리
+10. ✅ **설정값 외부화** — `AppSessionProperties`, `RateLimitProperties` (`@ConfigurationProperties`)
+11. ✅ **AuthUser Serializable** — Redis 직렬화 지원
+12. ✅ **세션 이벤트 감사 로그** — `SessionCreated/Deleted/ExpiredEvent` (세션 ID 축약)
 
 > 상세 설계: [§12. Redis 세션 관리 설계](#12-redis-세션-관리-설계)
 
 ### Phase 2 — SNS 기능 확장 시
-1. **Role 도입** — User/Admin
+1. ✅ **Role 도입** — `Role` enum (`USER`/`ADMIN`) + `@EnableMethodSecurity` + `/api/admin/**` hasRole (2026-04-13)
 2. **이메일 인증 흐름** (단기 JWT 1회용)
 3. **비밀번호 재설정 흐름** (단기 JWT 1회용)
 4. **계정 정지 / 복원** (Admin)
@@ -674,6 +859,165 @@ public void changePassword(Long userId, String currentRaw, String newRaw, String
 ```
 
 > **개선점**: 기존 tokenVersion 폴링 방식(최대 5분 지연) → Redis 즉시 삭제(0초 지연). tokenVersion 은 fallback 안전장치로 유지.
+
+### 12.4.1 TokenVersionFilter — 매 요청 검증이 필요한 이유
+
+#### 문제: 현재 방어 체계의 빈틈
+
+비밀번호 변경 시 다른 세션을 무효화하는 현재 구현은 **2중 방어**로 구성된다:
+
+```
+방어 1차: invalidateOtherSessions()  — Redis 에서 세션 즉시 삭제
+방어 2차: tokenVersion 비교          — /api/auth/me 에서만 검증
+```
+
+이 구조에는 **다음 시나리오에서 공격자의 세션이 살아남는 빈틈**이 있다:
+
+#### 시나리오 1: 공격자가 `/api/auth/me`를 호출하지 않는 경우
+
+```
+[피해자: 디바이스 A]              [공격자: 탈취 세션 B]
+   │                                │
+   │ PUT /api/user/1/password       │
+   │ → tokenVersion: 0 → 1         │
+   │ → invalidateOtherSessions()   │
+   │   Redis 에서 세션 B 삭제 시도  │
+   │                                │
+   │                                │ POST /api/post
+   │                                │ ← 세션 B 가 Redis 에서 삭제되었으면 401
+   │                                │ ← 그러나 아래 시나리오에서 삭제가 실패하면?
+```
+
+1차 방어(Redis 삭제)가 **성공하면** 문제없다. 그러나 **실패하는 경우**:
+
+#### 시나리오 2: Redis 세션 인덱스 불일치 (spring-session#3453)
+
+`findByPrincipalName(email)` 은 Redis 의 보조 인덱스(principal name index)를 조회한다. 이 인덱스에는 **알려진 이슈**(spring-session#3453)가 있다:
+
+- 인덱스 키에 TTL 이 없어 **고아 인덱스** 가 발생할 수 있음
+- 반대로, 세션은 존재하지만 **인덱스에서 누락**될 수도 있음
+- Redis Cluster 환경에서는 keyspace notification 이 단일 노드만 구독하여 인덱스 정리가 불완전
+
+인덱스 누락 시:
+```
+findByPrincipalName("victim@test.com")
+→ 인덱스에 세션 B 가 없음 (누락)
+→ 세션 B 는 삭제되지 않음
+→ 공격자의 세션 B 는 여전히 유효
+→ 2차 방어(tokenVersion)는 /api/auth/me 에서만 검증
+→ 공격자가 /api/auth/me 를 호출하지 않으면 영원히 검증되지 않음
+```
+
+#### 시나리오 3: 요청 동시성 (in-flight 요청)
+
+```
+t=0    공격자: POST /api/post 요청 시작 (세션 B)
+t=1    피해자: changePassword() → invalidateOtherSessions()
+t=2    Redis 에서 세션 B 삭제됨
+t=3    공격자: 요청이 이미 SecurityContext 에 로드된 상태 → 정상 처리됨
+```
+
+이 경우 단일 요청은 통과하지만, 이후 요청은 차단된다. 이것은 수용 가능한 수준이다.
+
+#### 시나리오 4: 계정 삭제/정지 시
+
+현재 `DELETE /api/user/{id}` 는 Redis 세션을 무효화하지 않는다 (#126). tokenVersion 검증이 매 요청에서 이루어진다면, 삭제된 사용자의 DB 조회 실패 → 세션 무효화가 자동으로 처리된다.
+
+#### 결론: 왜 TokenVersionFilter 가 필요한가
+
+| 방어 계층 | 역할 | 한계 |
+|----------|------|------|
+| **1차: Redis 세션 삭제** | 즉시 무효화 (0초) | 인덱스 누락 시 삭제 실패 가능 |
+| **2차: tokenVersion 비교 (현재: /api/auth/me 만)** | fallback 안전장치 | 공격자가 해당 경로를 호출하지 않으면 검증 안 됨 |
+| **2차 강화: TokenVersionFilter (전 경로)** | **모든 인증 요청에서 검증** | DB 조회 비용 → Caffeine 캐시로 완화 |
+
+> **1차 방어(Redis 삭제)만으로 충분하지 않은가?**
+> 대부분의 경우 충분하다. 그러나 **spring-session 의 알려진 인덱스 이슈(#3453)** 가 존재하는 한,
+> Redis 삭제에만 의존하는 것은 "best-effort" 에 불과하다.
+> 보안에서 "대부분 작동함"은 "취약함"과 같다. TokenVersionFilter 는 이 빈틈을 메운다.
+
+#### 설계: TokenVersionFilter
+
+```java
+/**
+ * 매 인증 요청에서 세션의 tokenVersion 과 DB 의 tokenVersion 을 비교.
+ * 불일치 시 세션을 무효화한다.
+ *
+ * DB 부하를 줄이기 위해 userId → tokenVersion 을 Caffeine 캐시(30초 TTL)로 관리.
+ * 비밀번호 변경 시 캐시를 evict 하면 최대 30초 이내 모든 세션이 무효화된다.
+ */
+public class TokenVersionFilter extends OncePerRequestFilter {
+
+    private final UserRepository userRepository;
+    private final Cache<Long, Integer> tokenVersionCache;  // Caffeine, 30초 TTL
+
+    @Override
+    protected void doFilterInternal(...) {
+        AuthUser authUser = getAuthUserFromSecurityContext();
+        if (authUser == null) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        int currentVersion = tokenVersionCache.get(
+            authUser.getId(),
+            id -> userRepository.findById(id)
+                .map(User::getTokenVersion)
+                .orElse(-1)  // 삭제된 사용자 → 불일치 유도
+        );
+
+        if (authUser.getTokenVersion() != currentVersion) {
+            session.invalidate();
+            SecurityContextHolder.clearContext();
+            FilterResponseUtils.writeJsonError(response, 401, "세션이 만료되었습니다.");
+            return;
+        }
+
+        filterChain.doFilter(request, response);
+    }
+}
+```
+
+#### 성능 영향 분석
+
+| 항목 | TokenVersionFilter 없음 (현재) | TokenVersionFilter 도입 후 |
+|------|-------------------------------|--------------------------|
+| 매 요청 DB 조회 | 없음 | **없음** (Caffeine 캐시 hit) |
+| 캐시 miss 시 | — | `userRepository.findById()` 1회 (30초당 1회) |
+| 비밀번호 변경 후 무효화 지연 | 최대 24시간 (absolute timeout) | **최대 30초** (캐시 TTL) |
+| 메모리 사용 | — | 활성 사용자 수 × ~50bytes (userId + int) |
+
+> **30초 캐시 TTL 근거**: 비밀번호 변경은 긴급 상황(계정 탈취 의심)에서 발생한다.
+> 30초는 보안과 성능의 균형점이다. 즉시성이 필요하면 TTL 을 5초로 줄이거나,
+> 비밀번호 변경 시 `tokenVersionCache.invalidate(userId)` 를 호출하여 0초 무효화도 가능하다.
+
+#### 방어 체계 최종 구성
+
+```
+[인증 요청 도달]
+  │
+  ├─ Spring Security: 세션에서 SecurityContext 복원 → AuthUser 주입
+  │
+  ├─ TokenVersionFilter (신규)
+  │   ├─ Caffeine 캐시에서 userId → tokenVersion 조회
+  │   ├─ 캐시 miss → DB 조회 → 캐시에 저장 (30초 TTL)
+  │   ├─ authUser.tokenVersion ≠ currentVersion → 세션 무효화 + 401
+  │   └─ 일치 → 통과
+  │
+  ├─ AbsoluteSessionTimeoutFilter: 24시간 절대 만료
+  │
+  └─ Controller 처리
+```
+
+```
+[비밀번호 변경 시]
+  │
+  ├─ 1차 방어: invalidateOtherSessions() — Redis 세션 즉시 삭제 (0초)
+  ├─ 2차 방어: User.tokenVersion 증가
+  │            → TokenVersionFilter 가 캐시 TTL 이내(30초) 에 감지
+  │            → 또는 changePassword 에서 tokenVersionCache.invalidate(userId) 호출 시 즉시 감지
+  └─ 현재 세션: refreshSecurityContext() 로 tokenVersion 갱신 → 본인은 로그아웃 안 됨
+```
 
 ### 12.5 SNS 서비스에 적합한 `sessionManagement` 설계
 
@@ -1008,10 +1352,67 @@ private static void requireOwnership(AuthUser authUser, Long targetId) {
 |------|----------|----------|
 | 회원가입 이메일 존재 여부 노출 (409) | 일반적 UX 트레이드오프. Rate limiting 으로 대량 조회 억제 | 일반 응답으로 통일 (Phase 2) |
 | dev 프로필 cookie 에 secure 미설정 | localhost HTTP 환경 필수 | 기본값을 restrictive 로 설정하고 dev 에서만 완화 (향후) |
-| `PUT /api/user/{id}` 가 nickname + password 동시 수정 | 프로필 수정과 비밀번호 변경이 별도 엔드포인트(`/password`)로 이미 분리됨 | 기존 `/api/user/{id}` 에서 password 필드 제거 검토 |
+| `PUT /api/user/{id}` 프로필 수정 | ~~password 필드 제거 완료 (04-13)~~ — nickname 만 변경. 비밀번호는 전용 `/password` 엔드포인트만 허용 | **해결됨** |
 | CSP `style-src 'unsafe-inline'` | Tailwind / shadcn/ui 호환 필요 | nonce 기반 전환 (Phase 2) |
 | 자동 계정 잠금 없음 | Rate limiting 으로 1차 방어 | N회 실패 → 임시 잠금 (Phase 2) |
 | tokenVersion int overflow | 20억 회 비밀번호 변경 = 사실상 불가능 | long 전환 (필요 시) |
+
+### 14.2 Phase 1.5 구현 상세 (2026-04-13)
+
+#### Redis 세션 관리 인프라
+
+- **의존성**: `spring-boot-starter-session-data-redis` + `com.github.ben-manes.caffeine:caffeine`
+- **활성화**: `spring.session.redis.repository-type=indexed` (Boot auto-config, `@Enable*` 어노테이션 미사용)
+- **`SessionConfig`**: `@ConditionalOnBean(FindByIndexNameSessionRepository.class)` — Redis 없는 테스트 환경에서 자동 비활성화
+- **`SpringSessionBackedSessionRegistry`**: `FindByIndexNameSessionRepository` → Spring Security 동시 세션 제어 연결
+- **`CompositeSessionAuthenticationStrategy`**: 커스텀 `RestAuthenticationFilter` 용 — (1) `ConcurrentSessionControlAuthenticationStrategy` → (2) `ChangeSessionIdAuthenticationStrategy` → (3) `RegisterSessionAuthenticationStrategy`
+- **`AbsoluteSessionTimeoutFilter`**: `session.getCreationTime()` fallback으로 배포 전 기존 세션도 처리. `Duration` 은 `AppSessionProperties` 에서 주입
+
+#### 비밀번호 변경 시 다른 세션 즉시 삭제
+
+```
+[비밀번호 변경 흐름 — 04-13 최종]
+UserController.changePassword()
+  → UserService.changePassword()
+    → validateRawPassword(currentRawPassword)  ← #89 추가
+    → validateRawPassword(newRawPassword)
+    → passwordEncoder.matches(current, stored)
+    → user.changePassword(encode(new))         ← tokenVersion 자동 증가
+  → refreshSecurityContext(updatedUser)         ← 현재 세션 AuthUser 갱신
+  → invalidateOtherSessions(email, sessionId)  ← Redis findByPrincipalName → 일괄 삭제
+```
+
+기존 tokenVersion 폴링 방식(최대 5분 지연) → Redis 즉시 삭제(0초). tokenVersion 은 fallback 안전장치로 유지.
+
+#### 프로필 수정 / 비밀번호 변경 분리 (Critical #94 수정)
+
+- **수정 전**: `PUT /api/user/{id}` 가 `UserUpdateRequest(nickname, password)` 를 받아 현재 비밀번호 확인 없이 교체 가능 → 세션 탈취 시 계정 탈취
+- **수정 후**: `UserUpdateRequest(nickname)` 만 허용. `UserUpdateCommand` 삭제. `User.update()` → `updateNickname()` + `changePassword()` 분리. 비밀번호 변경은 전용 `PUT /api/user/{id}/password` 만 허용 (현재 비밀번호 재확인 + tokenVersion 자동 증가)
+
+#### Post fetch join (Critical #81 수정)
+
+- **수정 전**: `PostService.create()` 가 `getReferenceById()` → lazy proxy. Controller 에서 `PostResponse.from(post.getAuthor())` 시 `LazyInitializationException`
+- **수정 후**: `findById()` 로 author 즉시 로드. `PostRepository` 에 `findWithAuthorById()` + `findAllWithAuthor()` fetch join 쿼리 추가. N+1 쿼리 문제도 동시 해결
+
+#### RateLimitFilter Caffeine 캐시 교체 (Critical #82, Warning #90 수정)
+
+- **수정 전**: `ConcurrentHashMap` + `emailBuckets` dead code + 10,000 초과 시 `ipBuckets.clear()` (전체 리셋 공격 가능)
+- **수정 후**: dead code 제거. `Caffeine` 캐시 (`maximumSize` + `expireAfterAccess(10분)`) 로 개별 엔트리 자동 eviction. `RateLimitProperties` 로 설정값 외부화
+
+#### 설정값 외부화 (Warning #86 #87 #88 수정)
+
+| 설정 | 프로퍼티 키 | 기본값 | 적용 대상 |
+|------|------------|--------|----------|
+| 동시 세션 수 | `app.session.max-sessions-per-user` | 3 | `SecurityConfig`, `CompositeSessionAuthenticationStrategy` |
+| 절대 세션 만료 | `app.session.absolute-timeout` | 24h | `AbsoluteSessionTimeoutFilter` |
+| IP 분당 요청 수 | `app.rate-limit.ip-requests-per-minute` | 20 | `RateLimitFilter` |
+| 최대 버킷 수 | `app.rate-limit.max-buckets` | 10000 | `RateLimitFilter` (Caffeine `maximumSize`) |
+
+#### 기타 보안 개선 (Warning #83 #85 수정)
+
+- `AuthController.me()`: `authUser == null` 방어적 체크 추가 — SecurityConfig 설정 변경 시 NPE 방지
+- `RestAuthenticationFilter`: Content-Type 비교를 `equalsIgnoreCase` → `MediaType.parseMediaType().isCompatibleWith()` 로 교체 — `application/json; charset=utf-8` 등 변형 허용
+- `AuthEventListener`: 세션 이벤트(`SessionCreated/Deleted/ExpiredEvent`) 감사 로그 추가, 세션 ID 앞 8자만 기록 (로그 유출 시 하이재킹 방지)
 
 ---
 
@@ -1020,9 +1421,216 @@ private static void requireOwnership(AuthUser authUser, Long targetId) {
 > **본 프로젝트는 단일 웹 클라이언트 + 단일 백엔드 구조이므로, Session-based 인증이 가장 단순하고 안전하며 운영 비용이 낮다.
 > JWT 는 모바일/외부 통합/단기 1회용 토큰 등 명확한 목적이 있을 때 한정해서 도입한다.**
 >
-> **Phase 0 (기본 인증) + Phase 1 (보안 강화) 가 모두 완료**되었으며, 해커 관점 리뷰에서 발견된 Critical/High 취약점도 즉시 수정됨.
-> **Phase 1.5 (Redis 세션 관리)** 설계 완료 — `RedisIndexedSessionRepository` + `SpringSessionBackedSessionRegistry` 로 중앙 집중식 세션 관리, 동시 세션 제어(3개), Sliding Session(30분) 도입 예정.
-> 다음 단계는 Phase 1.5 구현 후 Phase 2 (Role 도입, 이메일 인증, 비밀번호 재설정).
+> **Phase 0~1.5 + Phase 2.1 (보안 강화) 모두 완료.** Phase 2 Role 도입 완료.
+> 해커 관점 리뷰 3회 + 코드 리뷰 5회 + 민감 정보 감사 1회에서 발견된 이슈 중 Critical 3건 + High 1건 + Warning/Medium 20건+ 을 수정함.
+> 다음 단계는 Phase 2.2 (비밀번호 이력 재사용 금지 + Pwned Passwords).
+
+---
+
+## 16. 개선 사항 및 권장 사항
+
+> 해커 관점 리뷰 3회(Review #7, #9, #12) + 코드 리뷰 5회(Review #8, #10, #11)에서 도출된 미해결 항목을 통합 정리한다.
+> 우선순위는 **공격 가능성 × 피해 규모**로 결정하며, 구현 시 Phase 로드맵과 연계한다.
+
+### 16.1 즉시 권장 — 보안 강화 ✅ (Phase 2.1, 2026-04-14 완료)
+
+운영 전 반드시 적용해야 하는 보안 개선 사항. **전건 완료.**
+
+#### (1) TokenVersionFilter — 매 요청 세션 유효성 검증 [High, #123]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | tokenVersion 검증이 `/api/auth/me` 에서만 수행됨. 공격자가 해당 경로를 회피하면 비밀번호 변경 후에도 탈취 세션이 최대 24시간 유효 |
+| **공격 시나리오** | 세션 탈취 → 피해자 비밀번호 변경 → Redis 인덱스 누락(spring-session#3453)으로 삭제 실패 → 공격자가 `/api/auth/me` 미호출 → 탈취 세션으로 게시글 작성/계정 삭제 가능 |
+| **구현** | `TokenVersionFilter` (`OncePerRequestFilter`) + Caffeine 캐시(userId → tokenVersion, 30초 TTL). 비밀번호 변경 시 캐시 evict 하면 0초 무효화 |
+| **성능** | 매 요청 DB 조회 없음 (캐시 hit). 30초당 1회 miss → `findById` 1회 |
+| **상세 설계** | [§12.4.1 TokenVersionFilter](#1241-tokenversionfilter--매-요청-검증이-필요한-이유) |
+
+#### (2) 계정 삭제 시 Redis 세션 무효화 [Medium, #126]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | `DELETE /api/user/{id}` 가 DB 만 삭제하고 Redis 세션은 남겨둠. 삭제된 계정의 다른 디바이스 세션이 만료까지 유효 |
+| **구현** | `UserController.deleteUser()` 에서 `invalidateOtherSessions()` + 현재 세션 무효화 추가 |
+
+#### (3) FilterResponseUtils JSON injection 방어 [Medium, #124]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | `writeJsonError()` 가 문자열 결합으로 JSON 생성. public 메서드라 향후 사용자 입력 전달 시 JSON injection 가능 |
+| **구현** | `ObjectMapper` 또는 `Map.of("message", message)` + Jackson 직렬화로 교체 |
+
+#### (4) 감사 로그 개행 삽입 방어 [Medium, #105]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | 로그인 이메일에 `\n` 삽입 시 가짜 감사 로그 생성 가능 (log injection) |
+| **구현** | `AuthEventListener` 에서 principal name 의 `\r\n\t` → `_` 치환. 또는 JSON 구조화 로깅(Logback JSON encoder) 도입 |
+
+#### (5) Pageable size 상한 설정 [Medium, #100]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | `?size=2147483647` 로 전체 테이블 스캔 + OOM DoS |
+| **구현** | `spring.data.web.pageable.max-page-size=100` 프로퍼티 추가 (1줄) |
+
+#### (6) Cookie 보안 플래그 기본값 적용 [Low, #73 #98 #128]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | `profiles.active=dev` 가 기본값이라 배포 실수 시 cookie 보안 없이 운영 가능 |
+| **구현** | `application.yaml` (base)에 `secure: true`, `http-only: true`, `same-site: lax` 설정 → `application-dev.yaml` 에서 `secure: false` 로 완화 |
+
+#### (7) GlobalExceptionHandler catch-all 추가 [Low, #106]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | 미처리 예외 시 Spring 기본 에러 응답으로 스택트레이스/클래스명 노출 가능 |
+| **구현** | `@ExceptionHandler(Exception.class)` 추가 — 500 + 일반 메시지. `server.error.include-stacktrace=never` |
+
+### 16.2 중기 권장 — 기능 확장 (Phase 2.2~2.3)
+
+SNS 서비스 확장에 필요한 기능 단위 개선 사항.
+
+#### (8) 비밀번호 이력 재사용 금지 + 동일 비밀번호 변경 차단 [#121, §9.3 설계 완료]
+
+| 항목 | 내용 |
+|------|------|
+| **구현 범위** | `PasswordHistory` entity + `findTop3ByUser` + `passwordEncoder.matches()` × 3회 |
+| **포함 항목** | 현재 비밀번호와 동일 여부 검증 (#121), 최근 3개 이력 재사용 금지, `UserException.samePassword()` / `recentlyUsedPassword()` 팩토리 |
+| **성능** | Argon2 matches × 3 = ~150ms. 비밀번호 변경은 드문 작업이므로 수용 가능 |
+
+#### (9) 유출 비밀번호 차단 — Pwned Passwords [#127, §9.3 설계 완료]
+
+| 항목 | 내용 |
+|------|------|
+| **구현 범위** | k-Anonymity 방식 SHA-1 prefix 5자리 API 호출. fallback(API 실패 시 통과) + circuit breaker |
+| **의존성** | 외부 API (`api.pwnedpasswords.com`). Spring `RestClient` 사용 |
+| **NIST 800-63B** | 유출 목록 대조 "SHALL" — 준수를 위해 필요 |
+
+#### (10) 회원가입 에러 메시지 통일 [Medium, #72 #125]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | email/nickname 중복 시 각각 다른 에러 메시지 → 등록 여부 열거 가능 |
+| **구현 방안** | 응답을 `"회원가입을 처리할 수 없습니다."` 로 통일. 닉네임 중복 확인은 별도 `GET /api/user/check-nickname/{nickname}` 제공 (UX) |
+| **트레이드오프** | UX 약화 (어떤 필드가 문제인지 모름) vs 보안 강화. SNS 에서는 보안 우선 |
+
+#### (11) H2 콘솔 CSRF 면제 프로필 연동 [Medium, #74 #101]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | `/h2-console/**` CSRF ignore 가 프로필 무관하게 적용됨. 접근 자체는 dev only 로 차단되지만, CSRF 면제는 남아있음 |
+| **구현** | SecurityConfig 에서 devProfile 조건으로 CSRF ignore 도 분기: `if (devProfile) { csrf.ignoringRequestMatchers("/h2-console/**"); }` |
+
+#### (12) 계정 잠금 — 로그인 실패 N회 시 임시 잠금 [Medium, #78 #103]
+
+| 항목 | 내용 |
+|------|------|
+| **문제** | IP 로테이션 시 무제한 시도 가능. IP 기반 rate limiting 만으로는 불충분 |
+| **구현** | Redis 에 `login_failures:{email}` 카운터 (TTL 15분). 5회 초과 시 30분 임시 잠금. `AuthenticationFailureEvent` 에서 카운터 증가, 성공 시 리셋 |
+| **주의** | 잠금 자체가 DoS 벡터가 될 수 있음 — CAPTCHA 도입이 더 안전한 대안 |
+
+#### ~~(13) AuthUser Redis 직렬화에서 비밀번호 해시 제거~~ ✅ (Phase 2.1에서 완료, #102)
+
+`AuthUser` 에서 password 필드 완전 제거. `getPassword()` → null 반환. `serialVersionUID` 2L 로 변경. 2026-04-14 완료.
+
+### 16.3 코드 품질 개선 (Suggestion)
+
+보안/기능에 직접 영향은 없으나, 유지보수성과 일관성을 높이는 개선.
+
+| # | 항목 | 내용 |
+|---|------|------|
+| #92 | `UserDetailsServiceImpl` 더미 비밀번호 상수 추출 | `"dummy-password-for-timing-defense"` 가 2곳에 중복. `private static final String` 상수 추출 |
+| #93 | `PostService` → `UserRepository` 크로스 도메인 의존 | 규모 확대 시 Application Service 또는 인터페이스 분리 검토 |
+| #118 | `@Size(max = 500)` → `Post.MAX_CONTENT_LENGTH` 참조 | DTO 와 Entity 검증 값 동기화 |
+| #119 | `RestAuthSuccessHandler` inline Map → DTO 사용 | `UserResponse` 변경 시 동기화 누락 위험 제거 |
+| #120 | `AuthController` UserException 전체 catch | `NOT_FOUND` 만 catch 하거나 errorType 분기 |
+| #122 | `User.tokenVersion` 명시적 초기화 | `this.tokenVersion = 0` 가독성 개선 |
+
+### 16.4 우선순위 요약 + Phase 매핑
+
+```
+Phase 2.1 — 즉시 권장 (보안) ✅ 전건 완료
+  ├─ ✅ (1) TokenVersionFilter           [High]
+  ├─ ✅ (2) 계정 삭제 세션 무효화         [Medium]
+  ├─ ✅ (3) FilterResponseUtils 안전화    [Medium]
+  ├─ ✅ (4) 감사 로그 injection 방어      [Medium]
+  ├─ ✅ (5) Pageable max-page-size        [Medium]
+  ├─ ✅ (6) Cookie 보안 기본값            [Low]
+  ├─ ✅ (7) GlobalExceptionHandler catch-all [Low]
+  ├─ ✅ (13) AuthUser 비밀번호 해시 제거  [Medium, 민감 정보 감사에서 발견]
+  └─ ✅ 에러 메시지 민감 식별자 제거      [Medium, #72 #125]
+
+Phase 2.2 — 비밀번호 강화 (다음)
+  ├─ (8) 이력 재사용 금지 + 동일 변경 차단
+  └─ (9) Pwned Passwords 연동
+
+Phase 2.3 — 방어 고도화
+  ├─ (10) 회원가입 에러 메시지 통일
+  ├─ (11) H2 CSRF 면제 프로필 연동
+  └─ (12) 계정 잠금
+
+Phase 2 기존 — 기능 확장
+  ├─ 이메일 인증 흐름 (#54)
+  ├─ 비밀번호 재설정 흐름 (#55)
+  ├─ 계정 정지 / 복원 (Admin)
+  └─ Remember-Me (#56)
+```
+
+---
+
+## 17. 민감 정보 노출 방지 정책
+
+> 캐시, 쿠키, 토큰, 에러 처리 4개 관점에서 민감 정보 노출을 점검하고 방어 원칙을 정립한다.
+> 2026-04-14 감사 완료.
+
+### 17.1 캐시 (Redis Session + Caffeine)
+
+| 항목 | 상태 | 조치 |
+|------|------|------|
+| **AuthUser password hash** → Redis 직렬화 | ✅ **제거 완료** | `AuthUser` 에서 password 필드 제거. `getPassword()` → null. `serialVersionUID` 2L |
+| AuthUser email → Redis 직렬화 | 수용 | `getUsername()` + `findByPrincipalName()` 에 필요. Redis 접근 제어 + 암호화로 보호 |
+| Caffeine (TokenVersionFilter) | 안전 | `userId → tokenVersion` (int). 민감하지 않음 |
+| Caffeine (RateLimitFilter) | 안전 | `"ip:" + remoteAddr → Bucket`. IP 만 키로 사용 |
+
+**원칙**: Redis 세션에는 **인증 후 필요한 최소 정보만** 직렬화한다. 비밀번호 해시, 결제 정보, 개인 식별 번호는 절대 포함하지 않는다.
+
+### 17.2 쿠키
+
+| 항목 | 상태 | 조치 |
+|------|------|------|
+| Session cookie `Secure` | ✅ base yaml 기본값 `true` | dev 에서만 `false` 완화 |
+| Session cookie `HttpOnly` | ✅ base yaml 기본값 `true` | JS 접근 차단 |
+| Session cookie `SameSite` | ✅ base yaml 기본값 `Lax` | 크로스 사이트 요청 시 쿠키 미전송 |
+| CSRF cookie `HttpOnly` | `false` (의도적) | SPA 가 JS 로 읽어 `X-XSRF-TOKEN` 헤더 첨부. `XorCsrfTokenRequestAttributeHandler` 로 BREACH 완화 |
+| Set-Cookie 에 민감 정보 | 없음 | 세션 ID 만 포함 |
+
+**원칙**: 쿠키 보안 플래그는 **base config 에서 restrictive 기본값**을 설정하고, dev 에서만 최소한으로 완화한다. 배포 실수로 보안이 누락되지 않도록 "기본값이 안전" 패턴을 따른다.
+
+### 17.3 토큰
+
+| 항목 | 상태 | 조치 |
+|------|------|------|
+| `tokenVersion` HTTP 응답 | ✅ 미포함 | `UserResponse`, `UserSummaryResponse`, `RestAuthSuccessHandler` 모두 미포함 |
+| `AuthUser.getPassword()` HTTP 응답 | ✅ 미포함 | 응답 DTO 에 password 필드 없음. `getPassword()` → null |
+| CSRF 토큰 | 쿠키에만 노출 (의도적) | 응답 body 에 미포함 |
+| Role | 인증 응답에만 포함 | 공개 엔드포인트는 `UserSummaryResponse` (role 미포함) |
+
+**원칙**: 내부 상태(tokenVersion, password hash)는 **어떤 HTTP 응답에도 포함하지 않는다**. Role 은 본인 인증 경로에서만 노출한다.
+
+### 17.4 에러 처리
+
+| 항목 | 상태 | 조치 |
+|------|------|------|
+| 스택트레이스 | ✅ 미노출 | `server.error.include-stacktrace=never` + catch-all 핸들러 |
+| email in 에러 메시지 | ✅ **제거 완료** | `"이미 존재하는 이메일입니다."` (값 미포함) |
+| entity ID in 에러 메시지 | ✅ **제거 완료** | `"존재하지 않는 사용자입니다."` (ID 미포함) |
+| 인증 실패 메시지 | ✅ 일반화 | `"이메일 또는 비밀번호가 올바르지 않습니다."` — 어느 쪽이 틀렸는지 미노출 |
+| 감사 로그 injection | ✅ 방어 완료 | `sanitize()` 로 `\r\n\t` → `_` 치환 |
+| 미처리 예외 | ✅ catch-all | `"서버 오류가 발생했습니다."` — 내부 정보 미노출 |
+
+**원칙**: 에러 메시지에는 **사용자가 입력한 값을 그대로 반환하지 않는다**. 내부 식별자(ID, email)를 메시지에 포함하면 열거 공격 벡터가 된다. 모든 예외는 일반 메시지로 응답하고, 상세 정보는 서버 로그에만 기록한다.
 
 ---
 

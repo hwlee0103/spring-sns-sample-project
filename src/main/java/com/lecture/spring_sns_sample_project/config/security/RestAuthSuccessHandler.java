@@ -41,7 +41,9 @@ public class RestAuthSuccessHandler implements AuthenticationSuccessHandler {
             "email",
             authUser.getEmail(),
             "nickname",
-            authUser.getNickname());
+            authUser.getNickname(),
+            "role",
+            authUser.getRole().name());
     objectMapper.writeValue(response.getWriter(), body);
   }
 }
