@@ -153,7 +153,7 @@ public class UserController {
   /** 비밀번호 변경 후 현재 세션의 AuthUser 를 새 tokenVersion 으로 갱신. */
   private void refreshSecurityContext(
       User updatedUser, HttpServletRequest request, HttpServletResponse response) {
-    AuthUser newAuthUser = AuthUser.from(updatedUser);
+    AuthUser newAuthUser = AuthUser.withoutPassword(updatedUser);
     UsernamePasswordAuthenticationToken newAuth =
         new UsernamePasswordAuthenticationToken(newAuthUser, null, newAuthUser.getAuthorities());
     SecurityContext context = SecurityContextHolder.createEmptyContext();
