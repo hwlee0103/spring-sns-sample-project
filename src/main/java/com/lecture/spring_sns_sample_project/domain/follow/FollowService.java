@@ -66,9 +66,8 @@ public class FollowService {
       throw FollowException.alreadyFollowing();
     }
 
-    // 5. FollowCount 원자적 갱신
-    followCountRepository.incrementFolloweesCount(followerId);
-    followCountRepository.incrementFollowersCount(followingId);
+    // 5. FollowCount 원자적 갱신 — user_id 오름차순으로 UPDATE (데드락 방지)
+    updateFollowCounts(followerId, followingId, true);
 
     // 6. 성공 리턴
     return follow;
@@ -115,9 +114,8 @@ public class FollowService {
     // 4. Follow 삭제
     followRepository.delete(follow);
 
-    // 5. FollowCount 원자적 갱신
-    followCountRepository.decrementFolloweesCount(followerId);
-    followCountRepository.decrementFollowersCount(followingId);
+    // 5. FollowCount 원자적 갱신 — user_id 오름차순으로 UPDATE (데드락 방지)
+    updateFollowCounts(followerId, followingId, false);
   }
 
   /** 팔로워 목록 — 특정 사용자를 팔로우하는 사람들. */
@@ -158,4 +156,35 @@ public class FollowService {
 
   /** 팔로워/팔로잉 수 — Service 반환 값 객체. */
   public record FollowCountResult(long followerCount, long followeesCount) {}
+
+  /**
+   * FollowCount 원자적 갱신 — user_id 오름차순으로 UPDATE 하여 데드락을 방지한다.
+   *
+   * <p>상호 팔로우(A→B, B→A) 동시 실행 시 잠금 순서가 뒤바뀌면 데드락이 발생한다. 항상 작은 user_id 의 행을 먼저 UPDATE 하면 순환
+   * 대기(circular wait)가 불가능하므로 데드락이 원천 차단된다.
+   *
+   * @param increment true 면 +1 (팔로우), false 면 -1 (언팔로우)
+   */
+  private void updateFollowCounts(Long followerId, Long followingId, boolean increment) {
+    Long smallerId = Math.min(followerId, followingId);
+    Long largerId = Math.max(followerId, followingId);
+
+    if (increment) {
+      if (smallerId.equals(followerId)) {
+        followCountRepository.incrementFolloweesCount(followerId);
+        followCountRepository.incrementFollowersCount(followingId);
+      } else {
+        followCountRepository.incrementFollowersCount(followingId);
+        followCountRepository.incrementFolloweesCount(followerId);
+      }
+    } else {
+      if (smallerId.equals(followerId)) {
+        followCountRepository.decrementFolloweesCount(followerId);
+        followCountRepository.decrementFollowersCount(followingId);
+      } else {
+        followCountRepository.decrementFollowersCount(followingId);
+        followCountRepository.decrementFolloweesCount(followerId);
+      }
+    }
+  }
 }

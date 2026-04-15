@@ -361,6 +361,124 @@ public class FollowService {
 | 카운트 정합성 drift | 주기적 보정 배치로 실제 COUNT 와 동기화 (일/주 1회) |
 | FollowCount 행 부재 | 회원가입 시 초기행(0, 0) 자동 생성. null 처리 불필요 |
 
+**동시성 문제 분석 및 방어 전략**
+
+팔로우 시스템에서 발생 가능한 동시성 시나리오를 분석하고, 각 문제의 방어 수단을 정리한다.
+
+***시나리오 1: 같은 사용자가 같은 대상을 동시에 팔로우 (더블 클릭)***
+
+```
+Thread A: existsBy = false ──→ INSERT follows ──→ 성공 ──→ count +1
+Thread B: existsBy = false ──→ INSERT follows ──→ UNIQUE 위반 ──→ DataIntegrityViolationException
+                                                                    ──→ catch → alreadyFollowing (409)
+                                                                    ──→ count +1 실행 안 됨 (throw 이전에 위치)
+```
+
+| 방어 | 수단 |
+|------|------|
+| **1차**: Service `existsBy` | 대부분의 중복을 사전 차단 (DB 왕복 1회) |
+| **2차**: DB UNIQUE 제약 | race condition 최종 방어. INSERT 실패 → `DataIntegrityViolationException` |
+| **카운트 안전**: 코드 순서 | `save()` 성공 후에만 `incrementCount` 실행. catch 블록에서 throw → count 미도달 |
+
+> **결론**: 중복 삽입은 방어됨. FollowCount 는 Follow INSERT 성공 시에만 갱신.
+
+***시나리오 2: 여러 사용자가 같은 대상을 동시에 팔로우 (갱신 손실)***
+
+인플루언서 B 를 A, C, D 가 동시에 팔로우하는 상황:
+
+```
+Thread A: INSERT follows(A→B) ──→ UPDATE follow_counts SET followers_count = followers_count + 1 WHERE user_id = B
+Thread C: INSERT follows(C→B) ──→ UPDATE follow_counts SET followers_count = followers_count + 1 WHERE user_id = B
+Thread D: INSERT follows(D→B) ──→ UPDATE follow_counts SET followers_count = followers_count + 1 WHERE user_id = B
+```
+
+| 방어 | 수단 |
+|------|------|
+| **DB 원자적 UPDATE** | `SET count = count + 1` 은 DB 가 행 잠금(row lock)으로 직렬화 |
+
+**PostgreSQL READ_COMMITTED 에서의 동작:**
+
+```
+1. Thread A: UPDATE ... WHERE user_id = B  → B 행에 exclusive row lock 획득
+2. Thread C: UPDATE ... WHERE user_id = B  → B 행 잠금 대기 (blocking)
+3. Thread A: COMMIT → lock 해제. count = 10 → 11
+4. Thread C: lock 획득 → 커밋된 값(11) 기반으로 +1 → count = 12
+5. Thread D: 같은 방식으로 → count = 13
+```
+
+> **결론**: `SET count = count + 1` 은 DB 행 잠금으로 lost update 가 원천 불가능. JPA dirty checking (`count = 11` 을 코드에서 읽어서 `count = 11` 로 쓰는 방식)과 다름.
+
+***시나리오 3: 상호 팔로우 데드락 위험 ⚠️***
+
+```
+User A follows B: FollowCount UPDATE (A행: followees +1) → UPDATE (B행: followers +1)
+User B follows A: FollowCount UPDATE (B행: followees +1) → UPDATE (A행: followers +1)
+
+동시 실행 시:
+  Thread 1: A행 lock 획득 → B행 lock 요청 (대기)
+  Thread 2: B행 lock 획득 → A행 lock 요청 (대기)
+  → 데드락!
+```
+
+| 방어 | 수단 |
+|------|------|
+| **권장: 일관된 잠금 순서** | user_id 가 작은 쪽을 먼저 UPDATE. 모든 트랜잭션이 같은 순서로 잠금 → 데드락 불가 |
+
+```java
+// 데드락 방지 — user_id 오름차순으로 UPDATE
+Long smallerId = Math.min(followerId, followingId);
+Long largerId = Math.max(followerId, followingId);
+
+if (smallerId.equals(followerId)) {
+    // follower(작은 ID) 먼저 → following(큰 ID)
+    followCountRepository.incrementFolloweesCount(followerId);
+    followCountRepository.incrementFollowersCount(followingId);
+} else {
+    // following(작은 ID) 먼저 → follower(큰 ID)
+    followCountRepository.incrementFollowersCount(followingId);
+    followCountRepository.incrementFolloweesCount(followerId);
+}
+```
+
+> **원칙**: 여러 행을 UPDATE 할 때 **항상 동일한 순서(PK 오름차순)** 로 잠금을 획득한다. 이 순서를 모든 트랜잭션이 따르면 순환 대기(circular wait)가 불가능하므로 데드락이 발생하지 않는다.
+
+***시나리오 4: 팔로우 직후 즉시 언팔로우 (빠른 연속 클릭)***
+
+```
+Thread A: follow(1, 2)   → INSERT + count +1 +1 (진행 중, 미커밋)
+Thread B: unfollow(1, 2) → findByFollowerAndFollowing → 아직 INSERT 미커밋 → 조회 안 됨 → notFollowing (400)
+```
+
+| 방어 | 수단 |
+|------|------|
+| **DB 격리 수준** | READ_COMMITTED — Thread B 는 Thread A 의 미커밋 INSERT 를 볼 수 없음 → `notFollowing` 반환 |
+| **클라이언트** | 팔로우 버튼 debounce (300ms) + 요청 중 버튼 비활성화로 연속 클릭 방지 |
+
+> **결론**: 서버는 올바르게 동작 (미커밋 데이터 미노출). 클라이언트에서 UX 로 보완.
+
+***시나리오 5: 네트워크 재시도로 인한 중복 요청***
+
+```
+클라이언트: POST /api/user/2/follow → 타임아웃 → 재시도
+서버: 첫 번째 요청 성공 (Follow 저장 + count +1)
+     두 번째 요청 → existsBy = true → alreadyFollowing (409)
+```
+
+| 방어 | 수단 |
+|------|------|
+| **멱등성 보장** | 이미 팔로우 중이면 409 반환. count 는 중복 갱신 안 됨 |
+| **권장**: 클라이언트 | 409 응답을 "이미 팔로우 중" 으로 처리 (에러가 아닌 성공으로 취급) |
+
+**동시성 방어 요약**
+
+| 문제 | 발생 조건 | 방어 수단 | 상태 |
+|------|----------|----------|------|
+| 중복 삽입 | 같은 사용자 더블 클릭 | UNIQUE 제약 + catch | ✅ 방어됨 |
+| 갱신 손실 | 여러 사용자 동시 팔로우 | `SET count = count + 1` DB 행 잠금 | ✅ 방어됨 |
+| 데드락 | 상호 팔로우 동시 실행 | **user_id 오름차순 잠금 순서** | ⚠️ 구현 필요 |
+| 빠른 연속 클릭 | follow → 즉시 unfollow | DB 격리 수준 + 클라이언트 debounce | ✅ 방어됨 |
+| 네트워크 재시도 | 타임아웃 → 재요청 | 멱등성 (409 = 이미 완료) | ✅ 방어됨 |
+
 **Exception 설계**
 
 ```java
