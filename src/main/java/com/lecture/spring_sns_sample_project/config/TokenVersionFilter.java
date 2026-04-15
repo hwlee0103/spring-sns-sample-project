@@ -23,6 +23,10 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *
  * <p>DB 부하를 줄이기 위해 {@code userId → tokenVersion} 을 Caffeine 캐시(30초 TTL)로 관리한다. 비밀번호 변경 시 {@link
  * #evict(Long)} 을 호출하면 즉시 무효화된다.
+ *
+ * <p><b>다중 인스턴스 주의</b>: Caffeine 은 로컬 인메모리 캐시이므로, 비밀번호 변경 시 {@link #evict(Long)} 은 현재 인스턴스에서만 동작한다.
+ * 다른 인스턴스의 캐시는 TTL(30초) 만큼 stale 할 수 있다. 1차 방어인 Redis 세션 삭제({@code invalidateOtherSessions})가 대부분의
+ * 경우를 처리하며, 이 필터는 인덱스 누락 시의 fallback 이므로 30초 지연은 수용 가능하다.
  */
 public class TokenVersionFilter extends OncePerRequestFilter {
 

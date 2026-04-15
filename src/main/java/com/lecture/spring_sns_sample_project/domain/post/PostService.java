@@ -8,6 +8,12 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * 게시글 도메인 서비스.
+ *
+ * <p>{@link UserRepository} 에 대한 크로스 도메인 의존이 존재한다. 현재 규모에서는 실용적이나, 도메인이 확장되면 Application Service
+ * 레이어로 분리하여 도메인 간 의존을 제거하는 것을 검토한다.
+ */
 @Service
 @RequiredArgsConstructor
 public class PostService {
