@@ -64,9 +64,9 @@ public class FollowController {
 
   @GetMapping("/api/user/{id}/follow/count")
   public ResponseEntity<FollowCountResponse> getFollowCount(@PathVariable Long id) {
-    FollowService.FollowCount count = followService.getFollowCount(id);
+    FollowService.FollowCountResult count = followService.getFollowCount(id);
     return ResponseEntity.ok(
-        new FollowCountResponse(count.followerCount(), count.followingCount()));
+        new FollowCountResponse(count.followerCount(), count.followeesCount()));
   }
 
   @GetMapping("/api/user/{id}/follow/status")
