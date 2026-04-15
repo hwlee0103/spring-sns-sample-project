@@ -2,31 +2,42 @@ package com.lecture.spring_sns_sample_project.config;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.core.session.SessionRegistry;
+import org.springframework.security.core.session.SessionRegistryImpl;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
 import org.springframework.session.security.SpringSessionBackedSessionRegistry;
 
 /**
- * Spring Session + Redis 설정.
+ * Spring Session 설정.
  *
- * <p>Boot auto-config 가 {@code spring.session.redis.repository-type=indexed} 프로퍼티로 {@link
- * org.springframework.session.data.redis.RedisIndexedSessionRepository} 를 활성화한다. 이 클래스에서는 {@link
- * SpringSessionBackedSessionRegistry} 빈만 등록하여 Spring Security 의 동시 세션 제어에 연결한다.
- *
- * <p>테스트 환경({@code store-type=none}) 에서는 {@link FindByIndexNameSessionRepository} 빈이 없으므로 이 설정이 자동
- * 비활성화된다.
+ * <p>Redis 가 있으면 {@link SpringSessionBackedSessionRegistry} 를, 없으면 인메모리 {@link SessionRegistryImpl}
+ * 을 fallback 으로 등록한다.
  */
 @Configuration
-@ConditionalOnBean(FindByIndexNameSessionRepository.class)
-@RequiredArgsConstructor
-public class SessionConfig<S extends Session> {
+public class SessionConfig {
 
-  private final FindByIndexNameSessionRepository<S> sessionRepository;
+  /** Redis 환경 — {@link FindByIndexNameSessionRepository} 가 있을 때. */
+  @Configuration
+  @ConditionalOnBean(FindByIndexNameSessionRepository.class)
+  @RequiredArgsConstructor
+  static class RedisSessionConfig<S extends Session> {
 
+    private final FindByIndexNameSessionRepository<S> sessionRepository;
+
+    @Bean
+    public SpringSessionBackedSessionRegistry<S> sessionRegistry() {
+      return new SpringSessionBackedSessionRegistry<>(sessionRepository);
+    }
+  }
+
+  /** Redis 없는 환경 (dev/test) — 인메모리 fallback. */
   @Bean
-  public SpringSessionBackedSessionRegistry<S> sessionRegistry() {
-    return new SpringSessionBackedSessionRegistry<>(sessionRepository);
+  @ConditionalOnMissingBean(SessionRegistry.class)
+  public SessionRegistry sessionRegistry() {
+    return new SessionRegistryImpl();
   }
 }
