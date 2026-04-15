@@ -91,6 +91,9 @@ public class UserService {
     if (!passwordEncoder.matches(currentRawPassword, user.getPassword())) {
       throw UserException.invalidCredentials();
     }
+    if (currentRawPassword.equals(newRawPassword)) {
+      throw UserException.samePassword();
+    }
     user.changePassword(passwordEncoder.encode(newRawPassword));
     return user;
   }
