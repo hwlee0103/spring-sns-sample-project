@@ -279,6 +279,88 @@ public class FollowService {
 }
 ```
 
+**팔로우 프로세스 흐름도 — 단일 트랜잭션**
+
+```
+[Client]                           [FollowService]                    [DB]
+   │                                    │                               │
+   │ POST /api/user/{id}/follow         │                               │
+   │ ──────────────────────────────►   │                               │
+   │                                    │ ─── @Transactional 시작 ───   │
+   │                                    │                               │
+   │                                    │ 1. 입력 검증                   │
+   │                                    │    followerId == null? → 400  │
+   │                                    │    followingId == null? → 400 │
+   │                                    │    self-follow? → 400         │
+   │                                    │                               │
+   │                                    │ 2. 사용자 존재 확인            │
+   │                                    │    findById(followerId) ─────►│ SELECT users
+   │                                    │    findById(followingId) ────►│ SELECT users
+   │                                    │    없으면 → 404               │
+   │                                    │                               │
+   │                                    │ 3. 이미 팔로우 중?            │
+   │                                    │    existsByFollowerAnd... ───►│ SELECT follows (UNIQUE index)
+   │                                    │    이미 있으면 → 409          │
+   │                                    │                               │
+   │                                    │ 4. Follow 저장                │
+   │                                    │    save(new Follow) ─────────►│ INSERT follows
+   │                                    │    (race condition → 409)     │
+   │                                    │                               │
+   │                                    │ 5. FollowCount 원자적 갱신    │
+   │                                    │    incrementFolloweesCount ──►│ UPDATE follow_counts
+   │                                    │      (follower: +1)           │   SET followees_count = followees_count + 1
+   │                                    │    incrementFollowersCount ──►│ UPDATE follow_counts
+   │                                    │      (following: +1)          │   SET followers_count = followers_count + 1
+   │                                    │                               │
+   │                                    │ ─── @Transactional 커밋 ───   │
+   │                                    │                               │
+   │ ◄── 201 Created + FollowResponse  │                               │
+   │                                    │                               │
+   │ * 1~5 어느 단계에서든 실패 시      │                               │
+   │   전체 롤백 → Follow 미저장 +      │                               │
+   │   FollowCount 미변경              │                               │
+```
+
+```
+[언팔로우 프로세스 — 단일 트랜잭션]
+
+[Client]                           [FollowService]                    [DB]
+   │                                    │                               │
+   │ DELETE /api/user/{id}/follow       │                               │
+   │ ──────────────────────────────►   │                               │
+   │                                    │ ─── @Transactional 시작 ───   │
+   │                                    │                               │
+   │                                    │ 1. 입력 검증                   │
+   │                                    │ 2. 사용자 존재 확인            │
+   │                                    │ 3. Follow 조회                │
+   │                                    │    findByFollowerAnd... ─────►│ SELECT follows
+   │                                    │    없으면 → 400 (notFollowing)│
+   │                                    │                               │
+   │                                    │ 4. Follow 삭제                │
+   │                                    │    delete(follow) ───────────►│ DELETE follows
+   │                                    │                               │
+   │                                    │ 5. FollowCount 원자적 갱신    │
+   │                                    │    decrementFolloweesCount ──►│ UPDATE follow_counts
+   │                                    │      (follower: -1)           │   SET followees_count = followees_count - 1
+   │                                    │    decrementFollowersCount ──►│   WHERE followees_count > 0
+   │                                    │      (following: -1)          │
+   │                                    │                               │
+   │                                    │ ─── @Transactional 커밋 ───   │
+   │                                    │                               │
+   │ ◄── 204 No Content                │                               │
+```
+
+**데이터 정합성 보장**
+
+| 항목 | 방어 수단 |
+|------|----------|
+| Follow + FollowCount 원자성 | 단일 `@Transactional` — 어느 단계 실패든 전체 롤백 |
+| 중복 팔로우 | Service `existsBy` 선행 체크 + DB UNIQUE 제약 fallback |
+| 동시 카운트 갱신 | DB 원자적 UPDATE (`SET count = count + 1`). JPA dirty checking 미사용 |
+| 카운트 음수 방지 | `WHERE count > 0` 조건. 0 이하로 내려가지 않음 |
+| 카운트 정합성 drift | 주기적 보정 배치로 실제 COUNT 와 동기화 (일/주 1회) |
+| FollowCount 행 부재 | 회원가입 시 초기행(0, 0) 자동 생성. null 처리 불필요 |
+
 **Exception 설계**
 
 ```java
