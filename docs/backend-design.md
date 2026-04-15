@@ -829,7 +829,130 @@ DomainException (abstract)
 - Response 는 `PageResponse<T>` 로 감싸 메타데이터(`first`, `last`, `totalPages` 등) 함께 전달.
 - 프론트 무한 스크롤이 `last` 플래그를 활용한다.
 
-## 10. 빌드 / 실행
+## 10. 인덱스 전략
+
+> 쿼리 패턴을 분석하여 테이블별로 필요한 인덱스를 정리한다.
+> JPA/Hibernate 가 자동 생성하는 인덱스(PK, unique 제약)와 수동 추가가 필요한 인덱스를 구분한다.
+
+### 10.1 users
+
+| 인덱스 | 컬럼 | 자동 생성 | 사유 |
+|--------|------|----------|------|
+| PK | `id` | ✅ IDENTITY | — |
+| UNIQUE | `email` | ✅ `@Column(unique=true)` | 로그인 시 `findByEmail()`, 회원가입 `existsByEmail()` |
+| UNIQUE | `nickname` | ✅ `@Column(unique=true)` | `findByNickname()`, `existsByNickname()` |
+
+> 추가 인덱스 불필요. email/nickname unique 제약이 조회 인덱스 역할을 겸한다.
+
+### 10.2 posts
+
+| 인덱스 | 컬럼 | 자동 생성 | 사유 |
+|--------|------|----------|------|
+| PK | `id` | ✅ IDENTITY | `findWithAuthorById(id)` |
+| **추가 권장** | `author_id` | ❌ | 특정 사용자의 게시글 조회 (프로필 피드). 현재 미사용이지만 향후 `findByAuthorId()` 에 필수 |
+| **추가 권장** | `created_at DESC` | ❌ | 피드 최신순 정렬 (`findAllWithAuthor(Pageable)` + `sort=id,desc`). 현재 `id DESC` 로 정렬하므로 PK 인덱스가 커버하지만, `created_at` 정렬로 변경 시 필요 |
+
+```sql
+-- 권장 인덱스
+CREATE INDEX idx_posts_author_id ON posts (author_id);
+-- 향후 프로필 피드 + 팔로잉 피드에서 author_id 기반 조회가 빈번해짐
+-- 팔로잉 피드: SELECT * FROM posts WHERE author_id IN (팔로잉 목록) ORDER BY created_at DESC
+
+-- 복합 인덱스 (팔로잉 피드 최적화 — 향후)
+CREATE INDEX idx_posts_author_created ON posts (author_id, created_at DESC);
+-- author_id 필터 + created_at 정렬을 단일 인덱스 스캔으로 처리
+```
+
+> **사유**: 현재는 전체 피드(`findAll`)만 있지만, 팔로잉 피드(`내가 팔로우한 사람들의 글만`)가 추가되면 `WHERE author_id IN (...)` 쿼리가 핵심이 된다. 미리 `author_id` 인덱스를 추가해두면 마이그레이션 비용이 없다.
+
+### 10.3 follows
+
+| 인덱스 | 컬럼 | 자동 생성 | 사유 |
+|--------|------|----------|------|
+| PK | `id` | ✅ IDENTITY | — |
+| UNIQUE | `(follower_id, following_id)` | ✅ `@UniqueConstraint` | 중복 팔로우 방지 + `existsByFollowerAndFollowing()`, `findByFollowerAndFollowing()` |
+| **추가 권장** | `following_id` (단독) | ❌ | 팔로워 목록 조회: `WHERE following_id = ? ORDER BY created_at DESC` |
+| **추가 권장** | `(following_id, created_at DESC)` | ❌ | 팔로워 목록 페이징 최적화: 필터 + 정렬을 단일 인덱스로 |
+
+```sql
+-- unique 제약이 (follower_id, following_id) 순서로 생성되므로:
+-- ✅ follower_id 단독 조회 커버 (leading column)
+--    → findFollowingsByUser: WHERE follower_id = ? — UNIQUE 인덱스로 커버됨
+-- ❌ following_id 단독 조회 미커버
+--    → findFollowersByUser: WHERE following_id = ? — full table scan
+
+-- 권장 인덱스
+CREATE INDEX idx_follows_following_id ON follows (following_id);
+-- 팔로워 목록 조회 (가장 빈번한 조회 패턴)
+
+-- 고급: 복합 인덱스 (페이징 최적화)
+CREATE INDEX idx_follows_following_created ON follows (following_id, created_at DESC);
+-- 팔로워 목록 최신순 페이징을 인덱스 스캔만으로 처리
+
+CREATE INDEX idx_follows_follower_created ON follows (follower_id, created_at DESC);
+-- 팔로잉 목록 최신순 페이징 최적화 (unique 인덱스는 created_at 포함 안 함)
+```
+
+> **핵심**: `UNIQUE (follower_id, following_id)` 인덱스는 `follower_id` 단독 검색은 커버하지만, `following_id` 단독 검색은 커버하지 않는다. **팔로워 목록(`WHERE following_id = ?`)이 가장 빈번한 조회**이므로 `following_id` 인덱스는 필수.
+
+### 10.4 follow_counts
+
+| 인덱스 | 컬럼 | 자동 생성 | 사유 |
+|--------|------|----------|------|
+| PK | `id` | ✅ IDENTITY | — |
+| UNIQUE | `user_id` | ✅ `@JoinColumn(unique=true)` | `findByUserId()` — PK 수준 조회 성능 |
+
+> 추가 인덱스 불필요. user_id unique 인덱스가 O(1) 조회를 보장.
+
+### 10.5 인덱스 요약
+
+| 테이블 | 인덱스 | 타입 | 필수도 | 커버하는 쿼리 |
+|--------|--------|------|--------|-------------|
+| `users` | `email` | UNIQUE (자동) | ✅ 있음 | 로그인, 가입 중복 체크 |
+| `users` | `nickname` | UNIQUE (자동) | ✅ 있음 | 닉네임 조회, 수정 중복 체크 |
+| `posts` | `author_id` | INDEX | **권장** | 프로필 피드, 팔로잉 피드 |
+| `posts` | `(author_id, created_at DESC)` | INDEX | 향후 | 팔로잉 피드 정렬 최적화 |
+| `follows` | `(follower_id, following_id)` | UNIQUE (자동) | ✅ 있음 | 중복 체크, 팔로우 여부, 팔로잉 목록 |
+| `follows` | `following_id` | INDEX | **필수** | 팔로워 목록 (UNIQUE 인덱스 미커버) |
+| `follows` | `(following_id, created_at DESC)` | INDEX | 권장 | 팔로워 목록 페이징 최적화 |
+| `follows` | `(follower_id, created_at DESC)` | INDEX | 권장 | 팔로잉 목록 페이징 최적화 |
+| `follow_counts` | `user_id` | UNIQUE (자동) | ✅ 있음 | 카운트 조회 |
+
+### 10.6 JPA `@Table` 인덱스 선언
+
+Entity 에서 `@Table(indexes = ...)` 로 인덱스를 선언하면 Hibernate DDL 생성 시 자동 반영된다. 운영에서는 Flyway 마이그레이션으로 관리.
+
+```java
+// Follow.java
+@Entity
+@Table(name = "follows",
+    uniqueConstraints = @UniqueConstraint(columnNames = {"follower_id", "following_id"}),
+    indexes = {
+        @Index(name = "idx_follows_following_id", columnList = "following_id"),
+        @Index(name = "idx_follows_following_created", columnList = "following_id, created_at DESC"),
+        @Index(name = "idx_follows_follower_created", columnList = "follower_id, created_at DESC")
+    })
+
+// Post.java
+@Entity
+@Table(name = "posts",
+    indexes = {
+        @Index(name = "idx_posts_author_id", columnList = "author_id")
+    })
+```
+
+### 10.7 인덱스 비용 — 트레이드오프
+
+| 항목 | 영향 |
+|------|------|
+| INSERT 비용 | 인덱스당 ~10% 추가. follows 테이블에 3개 추가 → 팔로우 생성 시 ~30% 느려짐 |
+| 저장 공간 | 인덱스당 행 수 × ~20bytes. 100만 팔로우 × 3개 = ~60MB |
+| SELECT 성능 | full scan → index scan. O(N) → O(log N). 팔로워 100만 사용자도 ms 단위 응답 |
+
+> **SNS 특성**: 읽기 >> 쓰기 (팔로워 목록 조회가 팔로우 생성보다 100배+ 빈번). INSERT 비용 증가는 수용 가능.
+
+## 11. 빌드 / 실행
+
 
 ```bash
 ./gradlew build              # 빌드 (Spotless + 컴파일 + 테스트)
