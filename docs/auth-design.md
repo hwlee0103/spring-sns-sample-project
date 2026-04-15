@@ -165,6 +165,122 @@
    │ ◄──────────────────── 201 Created   │
 ```
 
+### 5.1.1 로그인 구현 방식 선택 — formLogin() vs 커스텀 필터 vs Controller
+
+#### 3가지 방식 비교
+
+| | **A. `formLogin()` DSL** | **B. 커스텀 필터 (현재 구조)** | **C. Controller 직접 구현** |
+|---|---|---|---|
+| 구현 | `http.formLogin()` DSL | `AbstractAuthenticationProcessingFilter` 상속 | `@RestController` + `AuthenticationManager` |
+| 요청 형식 | `application/x-www-form-urlencoded` | **JSON** | **JSON** |
+| 성공 응답 | `302 Redirect → /home` | **200 + JSON** | **200 + JSON** |
+| 실패 응답 | `302 Redirect → /login?error` | **401 + JSON** | **401 + JSON** |
+| 세션 고정 방어 | DSL 자동 | `SessionAuthenticationStrategy` 수동 설정 | **직접 호출 필요 (누락 위험)** |
+| 동시 세션 제어 | DSL 자동 | `CompositeSessionAuthenticationStrategy` 수동 구성 | **직접 구현 필요 (누락 위험)** |
+| SecurityContext 저장 | 자동 | `setSecurityContextRepository()` 수동 설정 | **직접 호출 필요 (누락 위험)** |
+| 이벤트 발행 | 자동 | **자동** (부모 클래스가 발행) | **수동 발행 필요 (누락 위험)** |
+| SPA 호환 | ❌ | ✅ | ✅ |
+| Spring Security 통합 | 최고 | **높음** (필터 체인 내) | 낮음 (체인 밖) |
+
+#### SPA (Single Page Application) 란
+
+SPA 는 브라우저가 HTML 을 한 번만 로드하고, 이후 모든 화면 전환을 JavaScript(React, Vue 등)가 처리하는 구조다.
+
+```
+[전통 웹앱 — MVC/Thymeleaf]
+  페이지 이동 = 서버에 HTML 요청 → 전체 새로고침
+  로그인 = form 전송 → 302 Redirect → 서버가 다음 HTML 렌더링
+
+[SPA — Next.js/React]
+  페이지 이동 = JS 가 URL 변경 + 화면 교체 (새로고침 없음)
+  로그인 = fetch("/api/auth/login", {JSON}) → 200/401 JSON 응답 → JS 가 화면 업데이트
+```
+
+본 프로젝트는 **Next.js(React) 프론트 + Spring Boot API 백엔드** 구조이므로 SPA 에 해당한다.
+
+#### `formLogin()` 이 SPA 에 부적합한 이유
+
+`formLogin()` 은 **사용 불가능한 것이 아니라**, SPA 에 맞추려면 결국 대부분을 커스텀해야 하여 사용 의미가 없어진다.
+
+**1단계: 응답 형식 문제**
+
+```
+formLogin() 기본 동작:
+  성공 → 302 Redirect → /home (HTML 페이지)
+  실패 → 302 Redirect → /login?error
+
+SPA 가 필요한 것:
+  성공 → 200 + JSON {"id":1, "email":"...", "role":"USER"}
+  실패 → 401 + JSON {"message":"이메일 또는 비밀번호가 올바르지 않습니다."}
+```
+
+→ SuccessHandler/FailureHandler 를 커스텀하면 **응답은** 해결 가능.
+
+**2단계: 요청 형식 문제 (해결 불가)**
+
+```java
+// formLogin() 내부의 UsernamePasswordAuthenticationFilter:
+String username = request.getParameter("username");  // form-urlencoded 만 지원
+String password = request.getParameter("password");
+```
+
+SPA 프론트의 모든 API 가 `application/json` 인데 로그인만 `form-urlencoded` → **일관성 파괴**.
+`usernameParameter("email")` 로 파라미터 이름은 바꿀 수 있지만, JSON body 파싱은 불가능.
+
+**3단계: 결론**
+
+```
+formLogin() 을 SPA 에 맞추려면:
+  ├─ SuccessHandler 커스텀    → JSON 응답
+  ├─ FailureHandler 커스텀    → JSON 401
+  ├─ 프론트만 form-encoded 예외 처리  → 일관성 깨짐
+  └─ 결국 핸들러를 다 바꾸면 formLogin() 을 쓰는 의미가 없음
+
+AbstractAuthenticationProcessingFilter 확장 (현재 구조):
+  ├─ JSON 요청/응답 네이티브 지원
+  ├─ 세션 고정/동시 세션/이벤트 발행 자동
+  └─ formLogin() 커스텀보다 명확하고 유지보수 용이
+```
+
+#### Controller 직접 구현이 위험한 이유
+
+```java
+// ❌ Controller 직접 구현 시 누락 위험 항목 5가지
+@PostMapping("/api/auth/login")
+public ResponseEntity<?> login(@RequestBody LoginRequest req, HttpServletRequest httpReq) {
+    Authentication auth = authenticationManager.authenticate(...);
+
+    // 1. ❌ 세션 고정 방어 — request.changeSessionId() 누락 → 세션 고정 공격 가능
+    // 2. ❌ 동시 세션 제어 — ConcurrentSessionControlStrategy 미호출 → maximumSessions 무력화
+    // 3. ❌ 세션 레지스트리 등록 — RegisterSessionStrategy 미호출 → invalidateOtherSessions 작동 안 함
+    // 4. ❌ SecurityContext 저장 — securityContextRepository.saveContext() 누락 → 다음 요청 미인증
+    // 5. ❌ 이벤트 발행 — AuthenticationSuccessEvent 미발행 → 감사 로그 미기록
+
+    SecurityContextHolder.getContext().setAuthentication(auth); // 이것만으로는 1~3, 5 누락
+}
+```
+
+`AbstractAuthenticationProcessingFilter` 를 상속하면 4, 5 는 부모 클래스가 자동 처리하고, 1~3 은 `setSessionAuthenticationStrategy()` 로 주입하면 된다.
+
+#### 본 프로젝트의 선택 — 방식 B (커스텀 필터)
+
+```
+RestAuthenticationFilter (AbstractAuthenticationProcessingFilter 상속)
+  ├─ attemptAuthentication(): JSON body → UsernamePasswordAuthenticationToken
+  ├─ CompositeSessionAuthenticationStrategy:
+  │     (1) ConcurrentSessionControl  → 동시 세션 3개 제한
+  │     (2) ChangeSessionId           → 세션 고정 방어
+  │     (3) RegisterSession           → 세션 레지스트리 등록
+  ├─ SecurityContextRepository        → HttpSession 에 인증 정보 저장
+  ├─ RestAuthSuccessHandler           → 200 + UserResponse JSON
+  ├─ RestAuthFailureHandler           → 401 + 일반 에러 메시지
+  └─ 부모 클래스가 자동 처리:
+        → AuthenticationSuccessEvent 발행 → AuthEventListener 감사 로그
+        → AuthenticationFailureEvent 발행 → 로그인 실패 기록
+```
+
+> **결론**: `formLogin()` 은 전통 MVC 웹앱에 적합하고, SPA 에서는 `AbstractAuthenticationProcessingFilter` 확장이 **JSON 호환 + Spring Security 보안 자동 통합**을 동시에 충족하는 최적의 선택이다.
+
 ### 5.2 단기 토큰 (이메일/비밀번호 재설정 — 향후)
 
 ```
