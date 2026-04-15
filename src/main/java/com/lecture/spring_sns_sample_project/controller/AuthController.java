@@ -1,5 +1,6 @@
 package com.lecture.spring_sns_sample_project.controller;
 
+import com.lecture.spring_sns_sample_project.config.ErrorType;
 import com.lecture.spring_sns_sample_project.controller.dto.UserResponse;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserException;
@@ -46,6 +47,9 @@ public class AuthController {
 
       return ResponseEntity.ok(UserResponse.from(user));
     } catch (UserException e) {
+      if (e.getErrorType() != ErrorType.NOT_FOUND) {
+        throw e; // NOT_FOUND 이외의 UserException 은 GlobalExceptionHandler 에 위임
+      }
       // 세션은 살아있지만 사용자가 DB 에서 삭제된 경우
       invalidateSession(httpRequest);
       return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();

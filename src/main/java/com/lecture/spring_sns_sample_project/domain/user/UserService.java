@@ -71,6 +71,9 @@ public class UserService {
   public User update(Long id, String nickname) {
     validateNickname(nickname);
     User user = userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
+    if (!user.getNickname().equals(nickname) && userRepository.existsByNickname(nickname)) {
+      throw UserException.nicknameAlreadyExists(nickname);
+    }
     user.updateNickname(nickname);
     return user;
   }
@@ -87,6 +90,9 @@ public class UserService {
     User user = userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
     if (!passwordEncoder.matches(currentRawPassword, user.getPassword())) {
       throw UserException.invalidCredentials();
+    }
+    if (currentRawPassword.equals(newRawPassword)) {
+      throw UserException.samePassword();
     }
     user.changePassword(passwordEncoder.encode(newRawPassword));
     return user;

@@ -13,11 +13,11 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import java.net.URI;
-import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
+import org.springframework.lang.Nullable;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContext;
@@ -34,13 +34,23 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequiredArgsConstructor
 public class UserController {
 
   private final UserService userService;
   private final SecurityContextRepository securityContextRepository;
-  private final FindByIndexNameSessionRepository<? extends Session> sessionRepository;
+  @Nullable private final FindByIndexNameSessionRepository<? extends Session> sessionRepository;
   private final com.lecture.spring_sns_sample_project.config.TokenVersionFilter tokenVersionFilter;
+
+  public UserController(
+      UserService userService,
+      SecurityContextRepository securityContextRepository,
+      @Nullable FindByIndexNameSessionRepository<? extends Session> sessionRepository,
+      com.lecture.spring_sns_sample_project.config.TokenVersionFilter tokenVersionFilter) {
+    this.userService = userService;
+    this.securityContextRepository = securityContextRepository;
+    this.sessionRepository = sessionRepository;
+    this.tokenVersionFilter = tokenVersionFilter;
+  }
 
   @PostMapping("/api/user")
   public ResponseEntity<UserResponse> register(@Valid @RequestBody UserCreateRequest request) {
@@ -131,15 +141,21 @@ public class UserController {
     }
   }
 
-  /** 계정 삭제 시 해당 사용자의 모든 세션을 Redis 에서 즉시 삭제. */
+  /** 계정 삭제 시 해당 사용자의 모든 세션을 Redis 에서 즉시 삭제. Redis 미사용 환경에서는 no-op. */
   private void invalidateAllSessions(String email) {
+    if (sessionRepository == null) {
+      return;
+    }
     sessionRepository
         .findByPrincipalName(email)
         .forEach((sessionId, session) -> sessionRepository.deleteById(sessionId));
   }
 
-  /** 비밀번호 변경 시 현재 세션을 제외한 해당 사용자의 모든 세션을 Redis 에서 즉시 삭제. */
+  /** 비밀번호 변경 시 현재 세션을 제외한 해당 사용자의 모든 세션을 Redis 에서 즉시 삭제. Redis 미사용 환경에서는 no-op. */
   private void invalidateOtherSessions(String email, String currentSessionId) {
+    if (sessionRepository == null) {
+      return;
+    }
     sessionRepository
         .findByPrincipalName(email)
         .forEach(
@@ -153,7 +169,7 @@ public class UserController {
   /** 비밀번호 변경 후 현재 세션의 AuthUser 를 새 tokenVersion 으로 갱신. */
   private void refreshSecurityContext(
       User updatedUser, HttpServletRequest request, HttpServletResponse response) {
-    AuthUser newAuthUser = AuthUser.from(updatedUser);
+    AuthUser newAuthUser = AuthUser.withoutPassword(updatedUser);
     UsernamePasswordAuthenticationToken newAuth =
         new UsernamePasswordAuthenticationToken(newAuthUser, null, newAuthUser.getAuthorities());
     SecurityContext context = SecurityContextHolder.createEmptyContext();

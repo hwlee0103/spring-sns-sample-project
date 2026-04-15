@@ -7,6 +7,8 @@ allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 
 code-reviewer agent 를 실행하여 코드리뷰 해.
 현재 변경된 파일이 없을 경우 전체 소스 대상으로 코드리뷰 진행해.
+지금까지 만든 코드에서 캐시, 쿠키, 토큰, 에러 처리 네 가지 관점에서 민감 정보 노출 가능한 곳 찾고 코드리뷰 내용으로 추가해.
+(수정, 개선이 필요한 부분, 권장사항 포함)
 
 리뷰 진행 후 `.claude/review-history/` 디렉토리 내 **월 단위 파일**(`YYYY-MM.md`)을 다음 규칙에 따라 갱신해줘.
 

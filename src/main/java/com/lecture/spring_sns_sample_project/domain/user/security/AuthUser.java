@@ -23,7 +23,7 @@ import org.springframework.security.core.userdetails.UserDetails;
 @Getter
 public class AuthUser implements UserDetails, Serializable {
 
-  @Serial private static final long serialVersionUID = 2L;
+  @Serial private static final long serialVersionUID = 3L;
 
   private final Long id;
   private final String email;
@@ -31,23 +31,51 @@ public class AuthUser implements UserDetails, Serializable {
   private final Role role;
   private final int tokenVersion;
 
-  public AuthUser(Long id, String email, String nickname, Role role, int tokenVersion) {
+  /**
+   * 비밀번호 해시 — 인증 시점({@code DaoAuthenticationProvider})에서만 사용. Redis 직렬화 시 {@code transient} 로 제외되어
+   * 세션에 저장되지 않는다.
+   */
+  private final transient String password;
+
+  public AuthUser(
+      Long id, String email, String nickname, Role role, int tokenVersion, String password) {
     this.id = id;
     this.email = email;
     this.nickname = nickname;
     this.role = role;
     this.tokenVersion = tokenVersion;
+    this.password = password;
   }
 
+  /** 인증용 — password hash 포함. {@code UserDetailsServiceImpl.loadUserByUsername()} 에서 사용. */
   public static AuthUser from(User user) {
     return new AuthUser(
-        user.getId(), user.getEmail(), user.getNickname(), user.getRole(), user.getTokenVersion());
+        user.getId(),
+        user.getEmail(),
+        user.getNickname(),
+        user.getRole(),
+        user.getTokenVersion(),
+        user.getPassword());
   }
 
-  /** 비밀번호 해시를 Redis 세션에 직렬화하지 않기 위해 항상 null 반환. */
+  /** 세션 갱신용 — password hash 미포함. {@code refreshSecurityContext()} 에서 사용. */
+  public static AuthUser withoutPassword(User user) {
+    return new AuthUser(
+        user.getId(),
+        user.getEmail(),
+        user.getNickname(),
+        user.getRole(),
+        user.getTokenVersion(),
+        null);
+  }
+
+  /**
+   * 인증 시점에는 실제 해시 반환, Redis 역직렬화 후에는 {@code transient} 로 null. 인증 완료 후 세션에서 복원된 {@code AuthUser} 는
+   * password 가 null 이므로 Redis 유출 시에도 해시가 노출되지 않는다.
+   */
   @Override
   public String getPassword() {
-    return null;
+    return password;
   }
 
   @Override

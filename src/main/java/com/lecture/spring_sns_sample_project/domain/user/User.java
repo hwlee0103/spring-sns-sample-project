@@ -62,6 +62,7 @@ public class User {
     this.password = encodedPassword;
     this.nickname = nickname;
     this.role = Role.USER;
+    this.tokenVersion = 0;
   }
 
   /** 프로필 수정 — nickname 만 변경. 비밀번호 변경은 {@link #changePassword(String)} 전용. */

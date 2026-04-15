@@ -68,7 +68,10 @@ public class SecurityConfig {
             csrf ->
                 csrf.csrfTokenRepository(csrfTokenRepository)
                     .csrfTokenRequestHandler(csrfRequestHandler)
-                    .ignoringRequestMatchers("/h2-console/**"))
+                    .ignoringRequestMatchers("/h2-console/**", "/api/auth/login")
+                    .ignoringRequestMatchers(
+                        org.springframework.security.web.servlet.util.matcher
+                            .PathPatternRequestMatcher.pathPattern(HttpMethod.POST, "/api/user")))
         .addFilterAfter(csrfCookieFilter(), UsernamePasswordAuthenticationFilter.class)
         .addFilterBefore(
             rateLimitFilter(rateLimitProperties), UsernamePasswordAuthenticationFilter.class)

@@ -15,6 +15,8 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class UserDetailsServiceImpl implements UserDetailsService {
 
+  private static final String DUMMY_RAW_PASSWORD = "dummy-password-for-timing-defense";
+
   private final UserRepository userRepository;
   private final PasswordEncoder passwordEncoder;
 
@@ -23,7 +25,7 @@ public class UserDetailsServiceImpl implements UserDetailsService {
 
   @PostConstruct
   void init() {
-    this.dummyEncodedPassword = passwordEncoder.encode("dummy-password-for-timing-defense");
+    this.dummyEncodedPassword = passwordEncoder.encode(DUMMY_RAW_PASSWORD);
   }
 
   @Override
@@ -32,8 +34,8 @@ public class UserDetailsServiceImpl implements UserDetailsService {
     if (userOpt.isEmpty()) {
       // 타이밍 공격 방어 — 존재하지 않는 사용자에도 동일한 시간(matches 비용)을 소모시켜
       // 응답 시간 차이로 계정 존재 여부가 탐지되지 않도록 한다.
-      passwordEncoder.matches("dummy-password-for-timing-defense", dummyEncodedPassword);
-      throw new UsernameNotFoundException("User not found: " + email);
+      passwordEncoder.matches(DUMMY_RAW_PASSWORD, dummyEncodedPassword);
+      throw new UsernameNotFoundException("User not found");
     }
     return AuthUser.from(userOpt.get());
   }
