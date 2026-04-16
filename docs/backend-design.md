@@ -1483,7 +1483,155 @@ Entity 에서 `@Table(indexes = ...)` 로 인덱스를 선언하면 Hibernate DD
 
 > **SNS 특성**: 읽기 >> 쓰기 (팔로워 목록 조회가 팔로우 생성보다 100배+ 빈번). INSERT 비용 증가는 수용 가능.
 
-## 11. 빌드 / 실행
+## 11. 테스트 전략
+
+테스트는 **Java 통합 테스트**(JUnit 5 + `@SpringBootTest`)와 **Shell 통합 테스트**(curl 기반 end-to-end) 두 축으로 운영한다.
+
+| 레벨 | 도구 | 검증 대상 | 실행 시점 |
+|------|------|----------|-----------|
+| Java 통합 | `@SpringBootTest` + H2 | Service/Repository 비즈니스 로직, 트랜잭션, @Retryable AOP, JPA 쿼리 | `./gradlew test` (CI/로컬) |
+| Shell 통합 | `curl` + `jq` | HTTP 계약(status/body), 인증/CSRF, 세션, IDOR 방어 | `./gradlew bootRun` 후 수동 실행 |
+
+### 11.1 Java 통합 테스트
+
+**위치**: `src/test/java/com/lecture/spring_sns_sample_project/**/*Test.java`
+
+**설계 원칙**:
+- `@SpringBootTest` + `@Import(TestSessionConfig.class)` — Redis 없이 in-memory 세션으로 컨텍스트 로드
+- 클래스 레벨 `@Transactional` 지양 — save() 의 `DataIntegrityViolationException` 이 flush 시점에만 발생하므로 테스트 트랜잭션에 묶이면 실제 DB 상태 검증 불가
+- `@BeforeEach` 에서 `deleteAllInBatch()` 로 수동 초기화 (의존 순서: follow → follow_count → user)
+- `@Nested` 로 메서드 단위 그룹핑 → happy path + validation + edge case 를 시각적으로 분리
+
+**도메인별 시나리오 매트릭스**:
+
+#### FollowServiceTest (30 scenarios)
+
+| 메서드 | 시나리오 |
+|--------|----------|
+| `follow()` | 정상 팔로우 + 카운트 증가 / null followerId / null followingId / 셀프 팔로우 / follower 미존재 / following 미존재 / 중복 팔로우(409) / 재팔로우(soft delete 복원) |
+| `unfollow()` | 정상 언팔로우 + 카운트 감소 / 팔로우 없음 / 셀프 언팔로우(#136 회귀) / null 검증 / follower 미존재 |
+| `getFollowers()` | 활성 팔로우만 반환 + JOIN FETCH / soft deleted 제외 / 미존재 사용자 빈 페이지(#148) / 페이징 동작 |
+| `getFollowings()` | 활성만 반환 / 언팔로우 제외 / 미존재 빈 페이지 |
+| `isFollowing()` | true / soft deleted false / 관계 없음 false / 방향성 검증 / 미존재 사용자 false(#148) |
+| `getFollowCount()` | 초기 (0,0) / 다중 팔로우 반영 / 미존재 예외 / 음수 방지 |
+
+#### UserServiceTest (설계 — 향후 작성)
+
+| 메서드 | 시나리오 |
+|--------|----------|
+| `register()` | 정상 가입 + FollowCount 초기행 생성 / null/blank 검증(email/password/nickname) / 중복 email(409) / 중복 nickname(409) / `DataIntegrityViolationException` race → email/nickname 분기 변환(#114) |
+| `update()` | 정상 nickname 변경 / nickname null-blank / 동일 nickname 유지 허용 / 중복 nickname(409) / 미존재 user(NOT_FOUND) |
+| `changePassword()` | 정상 변경 + tokenVersion 증가 / 현재비번 오류(invalidCredentials) / 동일 비번(samePassword #121) / null/blank 검증 / 미존재 user |
+| `delete()` | cascade 정리(follow/follow_count/post 모두 삭제 #143) / 미존재 user / 양방향 팔로우 관계 삭제 확인 |
+| `getById` / `getByEmail` / `getByNickname` | 정상 / 미존재 NOT_FOUND |
+
+#### AuthServiceTest / 인증 필터 (설계 — 향후 작성)
+
+| 영역 | 시나리오 |
+|------|----------|
+| 로그인 (RestAuthenticationFilter) | 정상 로그인 200 / 잘못된 email 401 + 타이밍 균일 / 잘못된 password 401 / JSON 미포함 400 / Content-Type 느슨 파싱(`application/json; charset=utf-8`) |
+| 세션 고정 방어 | 로그인 전후 세션 ID 변경 확인 (ChangeSessionIdAuthenticationStrategy) |
+| 동시 세션 제한 | 4번째 로그인 시 가장 오래된 세션 만료 (maxSessionsPerUser=3) |
+| tokenVersion (TokenVersionFilter) | 비밀번호 변경 → 다른 세션 401 / 현재 세션 refresh 로 200 유지 / 캐시 30초 TTL + evict on changePassword |
+| Rate Limit (RateLimitFilter) | IP 기반 분당 20 초과 시 429 / X-Forwarded-For 스푸핑 차단 / Caffeine 개별 eviction |
+| AccessDenied (#140) | 비본인 리소스 접근 시 403 JSON |
+| AuthEventListener (#141) | 로그인 실패 email 부분 마스킹 audit 로그 |
+
+### 11.2 Shell 통합 테스트
+
+**위치**: `src/main/resources/http/*.sh`
+
+**공통 규약**:
+- `BASE_URL=http://localhost:8080` — dev 프로필 전제
+- 멱등성: 이메일/닉네임에 `$(date +%s)` suffix → 반복 실행 가능
+- 쿠키 jar: `mktemp` → `trap cleanup EXIT` 로 종료 시 삭제
+- CSRF: 첫 로그인/GET 후 `XSRF-TOKEN` 쿠키 → `X-XSRF-TOKEN` 헤더로 재전송
+- `check()` 헬퍼: expected vs actual HTTP status 비교 후 PASS/FAIL 카운트
+- exit code: 실패 개수 (0 이면 ALL TESTS PASSED)
+
+**도메인별 시나리오**:
+
+#### `user.sh` — 23 steps
+
+| Step | 검증 항목 | Expected |
+|------|-----------|----------|
+| 1 | owner 회원가입 | 201 |
+| 2 | 이메일 형식 오류 (@NotBlank 등 Bean Validation) | 400 |
+| 3 | 비밀번호 길이 부족 | 400 |
+| 4 | 중복 email | 409 |
+| 5 | 중복 nickname | 409 |
+| 6 | attacker 회원가입 (IDOR 테스트용) | 201 |
+| 7 | ID 로 조회 (public) | 200 |
+| 8 | 미존재 ID | 404 |
+| 9 | 닉네임으로 조회 | 200 |
+| 10 | 페이징 조회 | 200 |
+| 11 | 비인증 수정 시도 | 401 |
+| 12 | owner 로그인 | 200 |
+| 13 | 본인 정보 수정 (인증 + 본인 리소스) | 200 |
+| 14 | attacker 로그인 | 200 |
+| 15 | IDOR — 타인 수정 시도 | 403 |
+| 16 | IDOR — 타인 삭제 시도 | 403 |
+| 17 | 비번 변경 — 현재비번 오류 | 401 |
+| 18 | 비번 변경 — 새비번이 현재와 동일 | 400 |
+| 19 | 비번 변경 성공 | 204 |
+| 20 | 본인 세션 유지 (refresh 확인) | 200 |
+| 21 | 본인 계정 삭제 | 204 |
+| 22 | 삭제 후 세션 무효화 | 401 |
+| 23 | 삭제된 계정 조회 | 404 |
+
+#### `auth.sh` — 7 steps
+
+| Step | 검증 항목 | Expected |
+|------|-----------|----------|
+| 1 | 회원가입 | 201 |
+| 2 | 비인증 me | 401 |
+| 3 | 로그인 | 200 |
+| 4 | 로그인 후 me | 200 |
+| 5 | 잘못된 비밀번호 | 401 |
+| 6 | 로그아웃 (CSRF 필요) | 204 |
+| 7 | 로그아웃 후 me | 401 |
+
+#### `post.sh` — 9 steps
+
+| Step | 검증 항목 | Expected |
+|------|-----------|----------|
+| 1 | 회원가입 | 201 |
+| 2 | 로그인 | 200 |
+| 3 | 비인증 게시글 생성 | 401 |
+| 4 | 인증 게시글 생성 (CSRF) | 201 |
+| 5 | 게시글 단건 조회 (public) | 200 |
+| 6 | 피드 조회 (페이징, public) | 200 |
+| 7 | 게시글 수정 | 200 |
+| 8 | 게시글 삭제 | 204 |
+| 9 | 삭제된 게시글 조회 | 404 |
+
+#### `follow.sh` — 15 steps
+
+| Step | 검증 항목 | Expected |
+|------|-----------|----------|
+| 1 | follower 회원가입 | 201 |
+| 2 | target 회원가입 | 201 |
+| 3 | follower 로그인 | 200 |
+| 4 | 팔로우 전 카운트 (public) | 200 (followers=0) |
+| 5 | 팔로우 | 201 |
+| 6 | 중복 팔로우 | 409 |
+| 7 | 셀프 팔로우 | 400 |
+| 8 | 팔로우 후 카운트 | 200 (followers=1) |
+| 9 | 팔로우 상태 확인 (인증) | 200 (isFollowing=true) |
+| 10 | 팔로워 목록 조회 (public) | 200 |
+| 11 | 팔로잉 목록 조회 (public) | 200 |
+| 12 | 언팔로우 | 204 |
+| 13 | 언팔로우 후 카운트 | 200 (followers=0) |
+| 14 | 재팔로우 (soft delete 복원) | 201 |
+| 15 | 비인증 팔로우 시도 | 401 |
+
+### 11.3 미커버 영역 (수동 검증)
+
+- **동시성 race**: `DataIntegrityViolationException` 변환 경로는 JMeter/k6 등 부하 도구로 별도 검증
+- **Rate limit 시나리오**: 분당 20회 초과 테스트는 shell 에서 비효율 — 필요 시 `RateLimitFilterTest` 로 분리
+- **Redis 세션 영속**: 실제 Redis 기동 후 수동 smoke test — CI 는 in-memory 폴백으로 커버
+
+## 12. 빌드 / 실행
 
 
 ```bash
@@ -1491,10 +1639,15 @@ Entity 에서 `@Table(indexes = ...)` 로 인덱스를 선언하면 Hibernate DD
 ./gradlew test               # 테스트만
 ./gradlew bootRun            # 애플리케이션 실행
 ./gradlew spotlessApply      # 포맷 자동 수정
-src/main/resources/http/user.sh  # API 통합 테스트 (curl)
+
+# Shell 통합 테스트 (bootRun 실행 중 별도 터미널에서)
+src/main/resources/http/user.sh     # User API (23 steps)
+src/main/resources/http/auth.sh     # Auth API (7 steps)
+src/main/resources/http/post.sh     # Post API (9 steps)
+src/main/resources/http/follow.sh   # Follow API (15 steps)
 ```
 
-## 11. 알려진 제약 / TODO
+## 13. 알려진 제약 / TODO
 
 - [ ] CSRF 비활성화 — 운영 전 토큰 도입
 - [ ] Review #9 — Entity 가 `PasswordEncoder` 에 직접 의존 (도메인 순수성 위배)
@@ -1504,5 +1657,6 @@ src/main/resources/http/user.sh  # API 통합 테스트 (curl)
 - [ ] Post 이미지 첨부 (presigned URL 패턴)
 - [ ] Like / Comment 도메인 추가
 - [x] Follow 도메인 설계 완료 (2026-04-15)
+- [x] FollowService Java 통합 테스트 작성 (2026-04-16, 30 scenarios)
+- [ ] UserService/AuthFilter 통합 테스트 작성
 - [ ] PostgreSQL 마이그레이션 (Flyway)
-- [ ] 통합 테스트 (`@SpringBootTest`)
