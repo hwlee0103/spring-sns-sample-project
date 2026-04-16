@@ -4,6 +4,7 @@ import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserRepository;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -61,6 +62,10 @@ public class FollowService {
             .findById(followingId)
             .orElseThrow(() -> FollowException.userNotFound(followingId));
 
+    // 2-1. 마이그레이션 이전 계정 방어 — FollowCount 행 보장
+    ensureFollowCountExists(follower);
+    ensureFollowCountExists(following);
+
     // 3. 기존 행 조회 (deleted 상관없이)
     Optional<Follow> existing = followRepository.findByFollowerAndFollowing(follower, following);
 
@@ -74,8 +79,12 @@ public class FollowService {
       found.restore();
       follow = found;
     } else {
-      // 새 Follow 생성
-      follow = followRepository.save(new Follow(follower, following));
+      // 새 Follow 생성 — 동시 요청 race 시 UNIQUE 위반 → 409 변환
+      try {
+        follow = followRepository.save(new Follow(follower, following));
+      } catch (DataIntegrityViolationException e) {
+        throw FollowException.alreadyFollowing();
+      }
     }
 
     // 4. FollowCount 원자적 갱신 — user_id 오름차순 (데드락 방지)
@@ -107,6 +116,9 @@ public class FollowService {
     if (followingId == null) {
       throw FollowException.invalidField("followingId");
     }
+    if (followerId.equals(followingId)) {
+      throw FollowException.selfFollow();
+    }
 
     User follower =
         userRepository
@@ -124,34 +136,44 @@ public class FollowService {
 
     follow.softDelete();
 
+    ensureFollowCountExists(follower);
+    ensureFollowCountExists(following);
     updateFollowCounts(followerId, followingId, false);
   }
 
-  /** 팔로워 목록 — 활성 팔로우만. */
+  /** FollowCount 행이 없으면 생성 — 마이그레이션 이전 계정 보호. */
+  private void ensureFollowCountExists(User user) {
+    if (followCountRepository.findByUserId(user.getId()).isEmpty()) {
+      try {
+        followCountRepository.save(new FollowCount(user));
+      } catch (DataIntegrityViolationException ignored) {
+        // 동시 요청이 이미 생성함 — 무시
+      }
+    }
+  }
+
+  /**
+   * 팔로워 목록 — 활성 팔로우만.
+   *
+   * <p>userId 직접 쿼리로 1쿼리 실행(기존 User 조회 + Follow 조회 2쿼리에서 단축). 존재하지 않는 userId 면 빈 페이지 반환 — 타인의 팔로워
+   * 목록은 공개 정보이므로 404 보다 빈 결과가 자연스러움.
+   */
   public Page<Follow> getFollowers(Long userId, Pageable pageable) {
-    User user =
-        userRepository.findById(userId).orElseThrow(() -> FollowException.userNotFound(userId));
-    return followRepository.findActiveFollowersByUser(user, pageable);
+    return followRepository.findActiveFollowersByUserId(userId, pageable);
   }
 
-  /** 팔로잉 목록 — 활성 팔로우만. */
+  /** 팔로잉 목록 — 활성 팔로우만. userId 직접 쿼리로 1쿼리 실행. */
   public Page<Follow> getFollowings(Long userId, Pageable pageable) {
-    User user =
-        userRepository.findById(userId).orElseThrow(() -> FollowException.userNotFound(userId));
-    return followRepository.findActiveFollowingsByUser(user, pageable);
+    return followRepository.findActiveFollowingsByUserId(userId, pageable);
   }
 
-  /** 팔로우 여부 확인 — 활성 팔로우만. */
+  /**
+   * 팔로우 여부 확인 — 활성 팔로우만. id 기반 exists 쿼리로 1쿼리 실행. 존재하지 않는 userId 면 false 반환(실제 존재하지 않으므로 팔로우 관계 역시
+   * 없음).
+   */
   public boolean isFollowing(Long followerId, Long followingId) {
-    User follower =
-        userRepository
-            .findById(followerId)
-            .orElseThrow(() -> FollowException.userNotFound(followerId));
-    User following =
-        userRepository
-            .findById(followingId)
-            .orElseThrow(() -> FollowException.userNotFound(followingId));
-    return followRepository.existsByFollowerAndFollowingAndDeletedFalse(follower, following);
+    return followRepository.existsByFollowerIdAndFollowingIdAndDeletedFalse(
+        followerId, followingId);
   }
 
   /** 팔로워/팔로잉 카운트 — FollowCount 테이블에서 O(1) 조회. */
@@ -163,8 +185,8 @@ public class FollowService {
     return new FollowCountResult(count.getFollowersCount(), count.getFolloweesCount());
   }
 
-  /** 팔로워/팔로잉 수 — Service 반환 값 객체. */
-  public record FollowCountResult(long followerCount, long followeesCount) {}
+  /** 팔로워/팔로이 수 — Service 반환 값 객체. 도메인(FollowCount) 네이밍과 통일. */
+  public record FollowCountResult(long followersCount, long followeesCount) {}
 
   /**
    * FollowCount 원자적 갱신 — user_id 오름차순으로 UPDATE 하여 데드락을 방지한다.

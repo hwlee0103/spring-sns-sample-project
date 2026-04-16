@@ -10,9 +10,12 @@ import org.springframework.http.HttpStatus;
  */
 public enum ErrorType {
   BAD_REQUEST(HttpStatus.BAD_REQUEST),
+  UNAUTHORIZED(HttpStatus.UNAUTHORIZED),
+  FORBIDDEN(HttpStatus.FORBIDDEN),
   NOT_FOUND(HttpStatus.NOT_FOUND),
   CONFLICT(HttpStatus.CONFLICT),
-  FORBIDDEN(HttpStatus.FORBIDDEN);
+  TOO_MANY_REQUESTS(HttpStatus.TOO_MANY_REQUESTS),
+  INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR);
 
   private final HttpStatus status;
 

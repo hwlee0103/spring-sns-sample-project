@@ -1,5 +1,6 @@
 package com.lecture.spring_sns_sample_project.domain.user.security;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.lecture.spring_sns_sample_project.domain.user.Role;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import java.io.Serial;
@@ -29,7 +30,9 @@ public class AuthUser implements UserDetails, Serializable {
   private final String email;
   private final String nickname;
   private final Role role;
-  private final int tokenVersion;
+
+  /** 내부 세션 검증용. 직렬화는 허용(Redis), JSON 응답에는 노출 금지. */
+  @JsonIgnore private final int tokenVersion;
 
   /**
    * 비밀번호 해시 — 인증 시점({@code DaoAuthenticationProvider})에서만 사용. Redis 직렬화 시 {@code transient} 로 제외되어
