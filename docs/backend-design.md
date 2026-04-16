@@ -1278,6 +1278,30 @@ public void restore() {
 > **향후 개선**: soft deleted 데이터가 누적되면 성능에 영향. 주기적 purge 배치(삭제 후 90일 경과 시 물리 삭제)를 추후 도입.
 > 인덱스에 `WHERE deleted = false` partial index 추가도 검토 (PostgreSQL 전환 후).
 
+### 5.7 회원가입 시 FollowCount 생성 실패 정책
+
+회원가입(`UserService.register`)에서 User 저장과 FollowCount 초기행 생성이 **단일 `@Transactional`** 로 묶여 있다.
+
+```
+@Transactional
+register():
+  1. User INSERT     → 성공
+  2. FollowCount INSERT → 실패 (예: DB 제약 위반, 커넥션 장애)
+  → @Transactional 롤백 → User INSERT 도 취소
+  → 클라이언트: 500 "서버 오류가 발생했습니다."
+```
+
+| 상황 | 동작 | 사유 |
+|------|------|------|
+| User + FollowCount 모두 성공 | 201 Created | 정상 |
+| User 성공 + FollowCount 실패 | **전체 롤백** → 500 | FollowCount 없이 User 만 존재하면 프로필 조회 시 NPE. 불완전 상태 허용 안 함 |
+| User 실패 | 롤백 → 409/400 | 비즈니스 예외 (중복 이메일 등) |
+
+> **정책**: FollowCount 생성은 회원가입의 필수 후속 작업이다. 실패 시 User 도 롤백하여 **불완전 상태를 원천 차단**한다.
+> 클라이언트는 500 응답 시 재시도한다 (회원가입 자체가 멱등 — 같은 email/nickname 으로 재요청 가능).
+>
+> **향후 개선**: DB 일시 장애로 FollowCount INSERT 만 실패하는 경우가 반복되면, `@Retryable` 을 register 에도 적용하여 자동 재시도 가능. 현재는 @Transactional 롤백으로 충분.
+
 ## 6. 인증 / 세션
 
 - **메커니즘**: HttpSession + **Spring Session Redis** (`RedisIndexedSessionRepository`). 중앙 집중식 세션 저장.
