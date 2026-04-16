@@ -16,26 +16,31 @@ public interface FollowRepository extends JpaRepository<Follow, Long> {
   /** 활성 팔로우만 존재 여부 확인. */
   boolean existsByFollowerAndFollowingAndDeletedFalse(User follower, User following);
 
+  /** 활성 팔로우 존재 여부 확인 — userId 직접. User 조회 없이 1쿼리로 수행. */
+  boolean existsByFollowerIdAndFollowingIdAndDeletedFalse(Long followerId, Long followingId);
+
   /** 활성 팔로우만 조회. */
   Optional<Follow> findByFollowerAndFollowingAndDeletedFalse(User follower, User following);
 
   /**
-   * 팔로워 목록 — 활성 팔로우만. fetch join 으로 follower User 즉시 로딩(N+1 방지).
+   * 팔로워 목록 — 활성 팔로우만. fetch join 으로 follower User 즉시 로딩(N+1 방지). userId 직접 쿼리 — 사전 User 조회 불필요.
    *
    * <p>countQuery 명시로 페이징 성능 최적화 — JOIN FETCH 제외한 COUNT 만 실행.
    */
   @Query(
       value =
-          "SELECT f FROM Follow f JOIN FETCH f.follower WHERE f.following = :user AND f.deleted = false",
-      countQuery = "SELECT COUNT(f) FROM Follow f WHERE f.following = :user AND f.deleted = false")
-  Page<Follow> findActiveFollowersByUser(@Param("user") User user, Pageable pageable);
+          "SELECT f FROM Follow f JOIN FETCH f.follower WHERE f.following.id = :userId AND f.deleted = false",
+      countQuery =
+          "SELECT COUNT(f) FROM Follow f WHERE f.following.id = :userId AND f.deleted = false")
+  Page<Follow> findActiveFollowersByUserId(@Param("userId") Long userId, Pageable pageable);
 
-  /** 팔로잉 목록 — 활성 팔로우만. fetch join 으로 following User 즉시 로딩. */
+  /** 팔로잉 목록 — 활성 팔로우만. fetch join 으로 following User 즉시 로딩. userId 직접 쿼리. */
   @Query(
       value =
-          "SELECT f FROM Follow f JOIN FETCH f.following WHERE f.follower = :user AND f.deleted = false",
-      countQuery = "SELECT COUNT(f) FROM Follow f WHERE f.follower = :user AND f.deleted = false")
-  Page<Follow> findActiveFollowingsByUser(@Param("user") User user, Pageable pageable);
+          "SELECT f FROM Follow f JOIN FETCH f.following WHERE f.follower.id = :userId AND f.deleted = false",
+      countQuery =
+          "SELECT COUNT(f) FROM Follow f WHERE f.follower.id = :userId AND f.deleted = false")
+  Page<Follow> findActiveFollowingsByUserId(@Param("userId") Long userId, Pageable pageable);
 
   /** 사용자 삭제 시 양방향 팔로우 관계 물리 삭제. */
   @org.springframework.data.jpa.repository.Modifying

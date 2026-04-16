@@ -152,31 +152,28 @@ public class FollowService {
     }
   }
 
-  /** 팔로워 목록 — 활성 팔로우만. */
+  /**
+   * 팔로워 목록 — 활성 팔로우만.
+   *
+   * <p>userId 직접 쿼리로 1쿼리 실행(기존 User 조회 + Follow 조회 2쿼리에서 단축). 존재하지 않는 userId 면 빈 페이지 반환 — 타인의 팔로워
+   * 목록은 공개 정보이므로 404 보다 빈 결과가 자연스러움.
+   */
   public Page<Follow> getFollowers(Long userId, Pageable pageable) {
-    User user =
-        userRepository.findById(userId).orElseThrow(() -> FollowException.userNotFound(userId));
-    return followRepository.findActiveFollowersByUser(user, pageable);
+    return followRepository.findActiveFollowersByUserId(userId, pageable);
   }
 
-  /** 팔로잉 목록 — 활성 팔로우만. */
+  /** 팔로잉 목록 — 활성 팔로우만. userId 직접 쿼리로 1쿼리 실행. */
   public Page<Follow> getFollowings(Long userId, Pageable pageable) {
-    User user =
-        userRepository.findById(userId).orElseThrow(() -> FollowException.userNotFound(userId));
-    return followRepository.findActiveFollowingsByUser(user, pageable);
+    return followRepository.findActiveFollowingsByUserId(userId, pageable);
   }
 
-  /** 팔로우 여부 확인 — 활성 팔로우만. */
+  /**
+   * 팔로우 여부 확인 — 활성 팔로우만. id 기반 exists 쿼리로 1쿼리 실행. 존재하지 않는 userId 면 false 반환(실제 존재하지 않으므로 팔로우 관계 역시
+   * 없음).
+   */
   public boolean isFollowing(Long followerId, Long followingId) {
-    User follower =
-        userRepository
-            .findById(followerId)
-            .orElseThrow(() -> FollowException.userNotFound(followerId));
-    User following =
-        userRepository
-            .findById(followingId)
-            .orElseThrow(() -> FollowException.userNotFound(followingId));
-    return followRepository.existsByFollowerAndFollowingAndDeletedFalse(follower, following);
+    return followRepository.existsByFollowerIdAndFollowingIdAndDeletedFalse(
+        followerId, followingId);
   }
 
   /** 팔로워/팔로잉 카운트 — FollowCount 테이블에서 O(1) 조회. */
