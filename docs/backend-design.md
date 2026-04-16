@@ -469,6 +469,43 @@ Thread B: unfollow(1, 2) → findByFollowerAndFollowing → 아직 INSERT 미커
 | **멱등성 보장** | 이미 팔로우 중이면 409 반환. count 는 중복 갱신 안 됨 |
 | **권장**: 클라이언트 | 409 응답을 "이미 팔로우 중" 으로 처리 (에러가 아닌 성공으로 취급) |
 
+**중복 삽입 해결책 비교**
+
+| # | 방식 | DB 의존 | 예외 발생 | 쿼리 수 | 적합도 |
+|---|------|--------|----------|---------|--------|
+| A | `existsBy` + UNIQUE catch **(현재 채택)** | 범용 (H2/PostgreSQL) | 경합 시만 | 2 (SELECT+INSERT) | **현재 최적** |
+| B | UNIQUE catch 만 (existsBy 생략) | 범용 | 중복 시 항상 | 1 (INSERT) | 단순하지만 예외 남용 |
+| C | `INSERT ON CONFLICT DO NOTHING` | **PostgreSQL 전용** | 없음 | 1 | **PostgreSQL 전환 후 최적** |
+| D | `SELECT FOR UPDATE` + INSERT | 범용 | 없음 | 2 + 잠금 | 과잉 |
+
+```
+[A. existsBy + UNIQUE catch — 현재 채택]
+  정상 경로:  SELECT(중복 없음) → INSERT → 성공                          쿼리 2회
+  동시 경합:  SELECT(중복 없음) → INSERT → UNIQUE 위반 → catch → 409     쿼리 2회 + 예외
+  → 대부분의 요청: SELECT 에서 중복 탐지 → 예외 발생 안 함
+  → 드문 경합만 예외 경유. 현실적으로 최적
+
+[B. UNIQUE catch 만]
+  중복 시:   INSERT → UNIQUE 위반 → DataIntegrityViolationException → catch → 409
+  ⚠️ 예외가 "정상 흐름"으로 사용됨. 매 중복마다 스택트레이스 생성 → 로그 노이즈 + 성능 비용
+  → 이미 팔로우한 상태에서 재요청 시 매번 예외. 비추천
+
+[C. INSERT ON CONFLICT DO NOTHING — PostgreSQL 전환 후 채택 권장]
+  INSERT INTO follows (follower_id, following_id, created_at)
+  VALUES (?, ?, NOW())
+  ON CONFLICT (follower_id, following_id) DO NOTHING;
+  → affected rows = 1 이면 성공, 0 이면 이미 존재 → 409
+  → 예외 없이 DB 가 원자적으로 중복 판단 + 삽입. 쿼리 1회. 가장 깔끔
+  ⚠️ H2 미지원 → dev 환경에서 사용 불가. PostgreSQL 전환 완료 후 적용
+
+[D. SELECT FOR UPDATE + INSERT]
+  SELECT ... FOR UPDATE → 행 잠금 → 없으면 INSERT
+  ⚠️ 행이 아직 없으면 잠글 수 없음 → gap lock 필요 → DB 벤더마다 동작 상이. 과잉
+```
+
+> **현재 선택**: 방식 A — H2(dev) + PostgreSQL(prod) 이중 환경에서 범용 동작. `existsBy` 로 대부분 사전 차단하고, 드문 경합만 UNIQUE catch 로 방어.
+> **향후**: PostgreSQL 전환 완료 시 방식 C (`ON CONFLICT DO NOTHING`) 로 업그레이드 → SELECT 쿼리 제거 + 예외 제거.
+
 **동시성 방어 요약**
 
 | 문제 | 발생 조건 | 방어 수단 | 상태 |
