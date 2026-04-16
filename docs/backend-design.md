@@ -1515,27 +1515,40 @@ Entity 에서 `@Table(indexes = ...)` 로 인덱스를 선언하면 Hibernate DD
 | `isFollowing()` | true / soft deleted false / 관계 없음 false / 방향성 검증 / 미존재 사용자 false(#148) |
 | `getFollowCount()` | 초기 (0,0) / 다중 팔로우 반영 / 미존재 예외 / 음수 방지 |
 
-#### UserServiceTest (설계 — 향후 작성)
+#### UserServiceTest (36 scenarios)
 
-| 메서드 | 시나리오 |
-|--------|----------|
-| `register()` | 정상 가입 + FollowCount 초기행 생성 / null/blank 검증(email/password/nickname) / 중복 email(409) / 중복 nickname(409) / `DataIntegrityViolationException` race → email/nickname 분기 변환(#114) |
-| `update()` | 정상 nickname 변경 / nickname null-blank / 동일 nickname 유지 허용 / 중복 nickname(409) / 미존재 user(NOT_FOUND) |
-| `changePassword()` | 정상 변경 + tokenVersion 증가 / 현재비번 오류(invalidCredentials) / 동일 비번(samePassword #121) / null/blank 검증 / 미존재 user |
-| `delete()` | cascade 정리(follow/follow_count/post 모두 삭제 #143) / 미존재 user / 양방향 팔로우 관계 삭제 확인 |
-| `getById` / `getByEmail` / `getByNickname` | 정상 / 미존재 NOT_FOUND |
+| @Nested 그룹 | 시나리오 | 수 |
+|---|---|---|
+| `Register` | 정상 가입 + FollowCount(0,0) 초기행 동반 생성 / 비밀번호 인코딩 저장(matches=true) / email·password·nickname null+blank (6개) / 중복 email 409 / 중복 nickname 409 (#114) | 10 |
+| `GetByXxx` | getById/getByEmail/getByNickname 각각 정상 + 미존재 NOT_FOUND | 6 |
+| `GetAll` | 페이징 totalElements/totalPages / 빈 결과 empty page | 2 |
+| `Update` | 정상 nickname 변경 (password 유지) / nickname null·blank / 동일 nickname 허용 (#130) / 중복 nickname 409 / 미존재 NOT_FOUND | 6 |
+| `ChangePassword` | 정상 변경 + tokenVersion++ + 새 비번 인코딩 / 현재비번 오류 invalidCredentials / 동일 비번 samePassword (#121) / current·new null / 미존재 NOT_FOUND | 6 |
+| `Delete` | 정상 삭제 / cascade FollowCount / cascade Post / cascade 양방향 Follow / 다른 사용자 레코드 격리 / 미존재 NOT_FOUND (#143) | 6 |
 
-#### AuthServiceTest / 인증 필터 (설계 — 향후 작성)
+#### AuthFlowIntegrationTest (12 scenarios) — MockMvc 기반
 
-| 영역 | 시나리오 |
-|------|----------|
-| 로그인 (RestAuthenticationFilter) | 정상 로그인 200 / 잘못된 email 401 + 타이밍 균일 / 잘못된 password 401 / JSON 미포함 400 / Content-Type 느슨 파싱(`application/json; charset=utf-8`) |
-| 세션 고정 방어 | 로그인 전후 세션 ID 변경 확인 (ChangeSessionIdAuthenticationStrategy) |
-| 동시 세션 제한 | 4번째 로그인 시 가장 오래된 세션 만료 (maxSessionsPerUser=3) |
-| tokenVersion (TokenVersionFilter) | 비밀번호 변경 → 다른 세션 401 / 현재 세션 refresh 로 200 유지 / 캐시 30초 TTL + evict on changePassword |
-| Rate Limit (RateLimitFilter) | IP 기반 분당 20 초과 시 429 / X-Forwarded-For 스푸핑 차단 / Caffeine 개별 eviction |
-| AccessDenied (#140) | 비본인 리소스 접근 시 403 JSON |
-| AuthEventListener (#141) | 로그인 실패 email 부분 마스킹 audit 로그 |
+| @Nested 그룹 | 시나리오 | 수 |
+|---|---|---|
+| `Login` (POST /api/auth/login) | 정상 로그인 200 + UserResponse(JSON) / password·tokenVersion 응답 미노출 (#144) / 잘못된 비밀번호 401 / 미존재 email 401 + 타이밍 균일 (UserDetailsServiceImpl 더미 인코딩) / Content-Type 느슨 파싱 `application/json;charset=UTF-8` (#104) / 잘못된 JSON 401 / 세션 고정 방어 (세션 존재 검증) | 6 |
+| `Me` (GET /api/auth/me) | 비인증 401 / 로그인 세션 포함 200 / DB user 삭제 후 세션으로 접근 시 401 (#25) / tokenVersion 불일치 401 (비번 변경 시뮬레이션 + Caffeine evict) | 4 |
+| `Logout` (POST /api/auth/logout) | 로그아웃 204 (CSRF 필요) / 로그아웃 후 동일 세션 me → 401 | 2 |
+
+**설계 보강**:
+- `@TestPropertySource(properties = "app.rate-limit.ip-requests-per-minute=10000")` — 연속 테스트가 RateLimitFilter 에 막히지 않도록 임계치 상향
+- `MockMvcBuilders.webAppContextSetup(context).apply(springSecurity())` — 전체 Spring Security 필터 체인 활성화
+- `tokenVersionFilter.evict(userId)` 를 `@BeforeEach` + 시나리오 중간에 호출 — Caffeine 캐시 잔류 방지
+- `MockHttpSession` 을 후속 요청에 `.session(session)` 으로 전달하여 인증 상태 유지
+- `csrf()` 헬퍼로 로그아웃 등 CSRF 필요한 요청 처리
+
+#### 미커버 (별도 테스트로 분리 권장)
+
+| 영역 | 이유 |
+|------|------|
+| 동시 세션 제한 (maxSessionsPerUser=3) | TestSessionConfig 의 in-memory 스텁이 `findByIndexNameAndIndexValue` 를 빈 map 으로 반환 → 실제 Redis `RedisIndexedSessionRepository` 필요 |
+| Rate Limit 초과 429 | 분당 20회 초과 시나리오 → MockMvc 반복 호출은 테스트 시간 부담. `RateLimitFilter` 단위 테스트 분리 권장 |
+| AuthEventListener audit 로그 마스킹 (#141) | Logger 출력 캡처 필요 → Logback `ListAppender` 로 별도 `AuthEventListenerTest` 분리 권장 |
+| IDOR 방어 403 (#67) | user.sh shell 테스트가 owner/attacker 이중 세션으로 이미 검증 — 중복 불필요 |
 
 ### 11.2 Shell 통합 테스트
 
@@ -1658,5 +1671,7 @@ src/main/resources/http/follow.sh   # Follow API (15 steps)
 - [ ] Like / Comment 도메인 추가
 - [x] Follow 도메인 설계 완료 (2026-04-15)
 - [x] FollowService Java 통합 테스트 작성 (2026-04-16, 30 scenarios)
-- [ ] UserService/AuthFilter 통합 테스트 작성
+- [x] UserService Java 통합 테스트 작성 (2026-04-17, 36 scenarios)
+- [x] AuthFlow MockMvc 통합 테스트 작성 (2026-04-17, 12 scenarios)
+- [ ] RateLimitFilter / AuthEventListener 단위 테스트 분리 (별도 과제)
 - [ ] PostgreSQL 마이그레이션 (Flyway)
