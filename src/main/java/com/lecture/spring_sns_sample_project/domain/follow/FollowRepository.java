@@ -36,4 +36,9 @@ public interface FollowRepository extends JpaRepository<Follow, Long> {
           "SELECT f FROM Follow f JOIN FETCH f.following WHERE f.follower = :user AND f.deleted = false",
       countQuery = "SELECT COUNT(f) FROM Follow f WHERE f.follower = :user AND f.deleted = false")
   Page<Follow> findActiveFollowingsByUser(@Param("user") User user, Pageable pageable);
+
+  /** 사용자 삭제 시 양방향 팔로우 관계 물리 삭제. */
+  @org.springframework.data.jpa.repository.Modifying
+  @Query("DELETE FROM Follow f WHERE f.follower = :user OR f.following = :user")
+  void deleteAllByUser(@Param("user") User user);
 }

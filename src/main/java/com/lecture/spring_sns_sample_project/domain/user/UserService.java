@@ -2,6 +2,8 @@ package com.lecture.spring_sns_sample_project.domain.user;
 
 import com.lecture.spring_sns_sample_project.domain.follow.FollowCount;
 import com.lecture.spring_sns_sample_project.domain.follow.FollowCountRepository;
+import com.lecture.spring_sns_sample_project.domain.follow.FollowRepository;
+import com.lecture.spring_sns_sample_project.domain.post.PostRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -15,7 +17,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class UserService {
 
   private final UserRepository userRepository;
+  private final FollowRepository followRepository;
   private final FollowCountRepository followCountRepository;
+  private final PostRepository postRepository;
   private final PasswordEncoder passwordEncoder;
 
   /**
@@ -107,9 +111,20 @@ public class UserService {
     return user;
   }
 
+  /**
+   * 회원 탈퇴 — 관련 레코드 cascade 정리.
+   *
+   * <p>FK 제약이 없으므로 애플리케이션에서 직접 관련 행을 삭제한다. 순서: follow → follow_count → post → user.
+   *
+   * <p>팔로우 관계는 양방향(follower/following) 모두 제거하여 고아 레코드를 남기지 않는다.
+   */
   @Transactional
   public void delete(Long id) {
     User user = userRepository.findById(id).orElseThrow(() -> UserException.notFound(id));
+    // Cascade cleanup — FK 제약이 없으므로 수동 정리 필수
+    followRepository.deleteAllByUser(user);
+    followCountRepository.deleteByUserId(id);
+    postRepository.deleteAllByAuthor(user);
     userRepository.delete(user);
   }
 

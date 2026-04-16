@@ -10,6 +10,11 @@ public interface FollowCountRepository extends JpaRepository<FollowCount, Long> 
 
   Optional<FollowCount> findByUserId(Long userId);
 
+  /** 사용자 삭제 시 FollowCount 행 물리 삭제. */
+  @Modifying
+  @Query("DELETE FROM FollowCount fc WHERE fc.user.id = :userId")
+  void deleteByUserId(@Param("userId") Long userId);
+
   /**
    * 팔로워 수 +1 — DB 원자적 UPDATE 로 lost update 방지.
    *
