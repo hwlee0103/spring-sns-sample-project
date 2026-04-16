@@ -4,6 +4,7 @@ import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserRepository;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -61,6 +62,10 @@ public class FollowService {
             .findById(followingId)
             .orElseThrow(() -> FollowException.userNotFound(followingId));
 
+    // 2-1. 마이그레이션 이전 계정 방어 — FollowCount 행 보장
+    ensureFollowCountExists(follower);
+    ensureFollowCountExists(following);
+
     // 3. 기존 행 조회 (deleted 상관없이)
     Optional<Follow> existing = followRepository.findByFollowerAndFollowing(follower, following);
 
@@ -74,8 +79,12 @@ public class FollowService {
       found.restore();
       follow = found;
     } else {
-      // 새 Follow 생성
-      follow = followRepository.save(new Follow(follower, following));
+      // 새 Follow 생성 — 동시 요청 race 시 UNIQUE 위반 → 409 변환
+      try {
+        follow = followRepository.save(new Follow(follower, following));
+      } catch (DataIntegrityViolationException e) {
+        throw FollowException.alreadyFollowing();
+      }
     }
 
     // 4. FollowCount 원자적 갱신 — user_id 오름차순 (데드락 방지)
@@ -107,6 +116,9 @@ public class FollowService {
     if (followingId == null) {
       throw FollowException.invalidField("followingId");
     }
+    if (followerId.equals(followingId)) {
+      throw FollowException.selfFollow();
+    }
 
     User follower =
         userRepository
@@ -124,7 +136,20 @@ public class FollowService {
 
     follow.softDelete();
 
+    ensureFollowCountExists(follower);
+    ensureFollowCountExists(following);
     updateFollowCounts(followerId, followingId, false);
+  }
+
+  /** FollowCount 행이 없으면 생성 — 마이그레이션 이전 계정 보호. */
+  private void ensureFollowCountExists(User user) {
+    if (followCountRepository.findByUserId(user.getId()).isEmpty()) {
+      try {
+        followCountRepository.save(new FollowCount(user));
+      } catch (DataIntegrityViolationException ignored) {
+        // 동시 요청이 이미 생성함 — 무시
+      }
+    }
   }
 
   /** 팔로워 목록 — 활성 팔로우만. */

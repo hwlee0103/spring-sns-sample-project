@@ -10,27 +10,31 @@ public interface FollowCountRepository extends JpaRepository<FollowCount, Long> 
 
   Optional<FollowCount> findByUserId(Long userId);
 
-  /** 팔로워 수 +1 — DB 원자적 UPDATE 로 lost update 방지. */
+  /**
+   * 팔로워 수 +1 — DB 원자적 UPDATE 로 lost update 방지.
+   *
+   * @return affected rows — 0 이면 FollowCount 행 부재 (호출자가 처리 필요)
+   */
   @Modifying
   @Query(
       "UPDATE FollowCount fc SET fc.followersCount = fc.followersCount + 1 WHERE fc.user.id = :userId")
-  void incrementFollowersCount(@Param("userId") Long userId);
+  int incrementFollowersCount(@Param("userId") Long userId);
 
   /** 팔로워 수 -1 — 음수 방지 조건 포함. */
   @Modifying
   @Query(
       "UPDATE FollowCount fc SET fc.followersCount = fc.followersCount - 1 WHERE fc.user.id = :userId AND fc.followersCount > 0")
-  void decrementFollowersCount(@Param("userId") Long userId);
+  int decrementFollowersCount(@Param("userId") Long userId);
 
   /** 팔로이 수 +1. */
   @Modifying
   @Query(
       "UPDATE FollowCount fc SET fc.followeesCount = fc.followeesCount + 1 WHERE fc.user.id = :userId")
-  void incrementFolloweesCount(@Param("userId") Long userId);
+  int incrementFolloweesCount(@Param("userId") Long userId);
 
   /** 팔로이 수 -1. */
   @Modifying
   @Query(
       "UPDATE FollowCount fc SET fc.followeesCount = fc.followeesCount - 1 WHERE fc.user.id = :userId AND fc.followeesCount > 0")
-  void decrementFolloweesCount(@Param("userId") Long userId);
+  int decrementFolloweesCount(@Param("userId") Long userId);
 }
