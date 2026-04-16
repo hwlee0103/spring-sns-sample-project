@@ -1126,6 +1126,158 @@ public class FollowController {
 }
 ```
 
+### 5.5 재시도 정책 (Retry Policy)
+
+팔로우 프로세스의 각 단계에서 발생 가능한 실패를 분류하고, 재시도 여부를 정의한다.
+
+**단계별 실패 분류**
+
+| 단계 | 실패 유형 | 재시도? | 사유 |
+|------|----------|--------|------|
+| 1. 입력 검증 | null, 셀프 팔로우 | ❌ | 클라이언트 오류. 재시도해도 동일 결과 |
+| 2. 사용자 확인 | notFound | ❌ | 존재하지 않는 사용자. 재시도 무의미 |
+| 3. 중복 체크 | alreadyFollowing | ❌ | 이미 팔로우 중. 의도된 거부 |
+| 4. Follow INSERT | **UNIQUE 위반** | ❌ | 동시 중복 요청. 이미 첫 요청이 성공함 |
+| 4. Follow INSERT | **DB 일시 장애** (커넥션 타임아웃 등) | ✅ | 일시적 문제. 재시도 시 성공 가능 |
+| 5. FollowCount UPDATE | **데드락 감지** (`DeadlockLoserDataAccessException`) | ✅ | DB 가 한쪽 트랜잭션을 희생. 재시도 시 성공 |
+| 5. FollowCount UPDATE | **DB 일시 장애** | ✅ | 일시적 문제 |
+
+> **원칙**: "재시도해도 결과가 바뀌지 않는" 비즈니스 예외(400, 404, 409)는 재시도하지 않는다. "일시적 인프라 장애"만 재시도한다.
+
+**재시도 대상 예외**
+
+```java
+// 재시도 대상 (일시적, transient)
+- org.springframework.dao.TransientDataAccessException    // DB 커넥션 타임아웃 등
+- org.springframework.dao.DeadlockLoserDataAccessException // 데드락 희생 (위 하위)
+- org.springframework.dao.QueryTimeoutException            // 쿼리 타임아웃
+
+// 재시도 비대상 (영구적, permanent)
+- FollowException (모든 하위)          // 비즈니스 규칙 위반
+- DataIntegrityViolationException     // UNIQUE 위반 → alreadyFollowing 변환
+- ConstraintViolationException        // Bean Validation
+```
+
+**재시도 전략: Spring Retry**
+
+```java
+@Retryable(
+    retryFor = {TransientDataAccessException.class},
+    maxAttempts = 3,
+    backoff = @Backoff(delay = 100, multiplier = 2)  // 100ms → 200ms → 400ms
+)
+@Transactional
+public Follow follow(Long followerId, Long followingId) { ... }
+```
+
+| 설정 | 값 | 사유 |
+|------|---|------|
+| retryFor | `TransientDataAccessException` | DB 일시 장애 + 데드락만 재시도 |
+| maxAttempts | 3 | 3회 시도 후 포기 → 500 반환 |
+| delay | 100ms, ×2 배수 | 짧은 간격 + 지수 백오프. DB 부하 완화 |
+
+> **현재 구현**: 데드락 방지를 위해 user_id 오름차순 잠금 순서를 적용했으므로 데드락 발생 확률은 극히 낮다. 재시도는 예외적 상황(DB 순간 장애)에 대한 안전망이다.
+> **향후**: `spring-boot-starter-aop` + `spring-retry` 의존성 추가 시 `@Retryable` 적용. 현재는 설계만 정의하고, 운영 단계에서 도입.
+
+### 5.6 삭제 정책 (Soft Delete)
+
+팔로우 해제(언팔로우) 시 물리 삭제(hard delete) 대신 **논리 삭제(soft delete)** 를 적용한다.
+
+**Soft Delete 설계**
+
+```java
+// Follow entity 에 추가
+@Column(nullable = false)
+private boolean deleted = false;
+
+@Column
+private Instant deletedAt;
+
+public void softDelete() {
+    this.deleted = true;
+    this.deletedAt = Instant.now();
+}
+```
+
+**Repository — 삭제되지 않은 팔로우만 조회**
+
+```java
+// 기본 조회는 deleted = false 만
+boolean existsByFollowerAndFollowingAndDeletedFalse(User follower, User following);
+
+Optional<Follow> findByFollowerAndFollowingAndDeletedFalse(User follower, User following);
+
+@Query("SELECT f FROM Follow f JOIN FETCH f.follower WHERE f.following = :user AND f.deleted = false")
+Page<Follow> findActiveFollowersByUser(@Param("user") User user, Pageable pageable);
+
+@Query("SELECT f FROM Follow f JOIN FETCH f.following WHERE f.follower = :user AND f.deleted = false")
+Page<Follow> findActiveFollowingsByUser(@Param("user") User user, Pageable pageable);
+```
+
+**FollowService 언팔로우 — soft delete 적용**
+
+```java
+@Transactional
+public void unfollow(Long followerId, Long followingId) {
+    // ... 검증 ...
+    Follow follow = followRepository
+        .findByFollowerAndFollowingAndDeletedFalse(follower, following)
+        .orElseThrow(FollowException::notFollowing);
+
+    follow.softDelete();  // deleted = true, deletedAt = now()
+    // → JPA dirty checking 으로 UPDATE
+
+    // FollowCount 감소
+    updateFollowCounts(followerId, followingId, false);
+}
+```
+
+**UNIQUE 제약과 Soft Delete 의 충돌 해결**
+
+```
+문제: UNIQUE (follower_id, following_id) 상태에서 soft delete 시
+  A → X 팔로우 (deleted = false)
+  A → X 언팔로우 (deleted = true, 행은 남아있음)
+  A → X 재팔로우 → INSERT 시도 → UNIQUE 위반!
+  → 이미 행이 존재(deleted=true)하므로 새 행 INSERT 불가
+
+해결: 재팔로우 시 기존 soft deleted 행을 복원
+
+  Follow existing = followRepository
+      .findByFollowerAndFollowing(follower, following);  // deleted 상관없이 조회
+  if (existing != null && existing.isDeleted()) {
+      existing.restore();  // deleted = false, deletedAt = null, createdAt = now()
+      // FollowCount +1
+      return existing;
+  }
+  if (existing != null && !existing.isDeleted()) {
+      throw FollowException.alreadyFollowing();
+  }
+  // 행 자체가 없으면 새 INSERT
+```
+
+```java
+// Follow entity 에 복원 메서드
+public void restore() {
+    this.deleted = false;
+    this.deletedAt = null;
+    this.createdAt = Instant.now();
+}
+```
+
+**Soft Delete 도입 사유**
+
+| 항목 | Hard Delete (기존) | Soft Delete (권장) |
+|------|-------------------|-------------------|
+| 데이터 복원 | 불가능 | `deleted = false` 로 복원 |
+| 감사/분석 | 삭제 이력 없음 | `deletedAt` 으로 이력 추적 |
+| 팔로우 패턴 분석 | 불가능 | "팔로우 → 언팔 → 재팔" 패턴 확인 가능 |
+| UNIQUE 제약 | 단순 | 재팔로우 시 복원 로직 필요 (추가 복잡도) |
+| 저장 공간 | 절약 | 삭제 데이터 누적 → 주기적 purge 필요 |
+
+> **향후 개선**: soft deleted 데이터가 누적되면 성능에 영향. 주기적 purge 배치(삭제 후 90일 경과 시 물리 삭제)를 추후 도입.
+> 인덱스에 `WHERE deleted = false` partial index 추가도 검토 (PostgreSQL 전환 후).
+
 ## 6. 인증 / 세션
 
 - **메커니즘**: HttpSession + **Spring Session Redis** (`RedisIndexedSessionRepository`). 중앙 집중식 세션 저장.
