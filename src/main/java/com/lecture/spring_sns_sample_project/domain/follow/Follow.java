@@ -47,8 +47,13 @@ public class Follow {
       foreignKey = @ForeignKey(value = ConstraintMode.NO_CONSTRAINT))
   private User following;
 
-  @Column(nullable = false, updatable = false)
+  @Column(nullable = false)
   private Instant createdAt;
+
+  @Column(nullable = false)
+  private boolean deleted = false;
+
+  @Column private Instant deletedAt;
 
   protected Follow() {}
 
@@ -64,6 +69,19 @@ public class Follow {
     }
     this.follower = follower;
     this.following = following;
+    this.createdAt = Instant.now();
+  }
+
+  /** 언팔로우 — 논리 삭제. */
+  public void softDelete() {
+    this.deleted = true;
+    this.deletedAt = Instant.now();
+  }
+
+  /** 재팔로우 — soft deleted 행 복원. */
+  public void restore() {
+    this.deleted = false;
+    this.deletedAt = null;
     this.createdAt = Instant.now();
   }
 }

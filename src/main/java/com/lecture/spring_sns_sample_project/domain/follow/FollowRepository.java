@@ -10,19 +10,22 @@ import org.springframework.data.repository.query.Param;
 
 public interface FollowRepository extends JpaRepository<Follow, Long> {
 
-  boolean existsByFollowerAndFollowing(User follower, User following);
-
+  /** deleted 상관없이 조회 — 재팔로우 시 기존 행 복원에 사용. */
   Optional<Follow> findByFollowerAndFollowing(User follower, User following);
 
-  /** 팔로워 목록 — 특정 사용자를 팔로우하는 사람들. */
-  @Query("SELECT f FROM Follow f JOIN FETCH f.follower WHERE f.following = :user")
-  Page<Follow> findFollowersByUser(@Param("user") User user, Pageable pageable);
+  /** 활성 팔로우만 존재 여부 확인. */
+  boolean existsByFollowerAndFollowingAndDeletedFalse(User follower, User following);
 
-  /** 팔로잉 목록 — 특정 사용자가 팔로우하는 사람들. */
-  @Query("SELECT f FROM Follow f JOIN FETCH f.following WHERE f.follower = :user")
-  Page<Follow> findFollowingsByUser(@Param("user") User user, Pageable pageable);
+  /** 활성 팔로우만 조회. */
+  Optional<Follow> findByFollowerAndFollowingAndDeletedFalse(User follower, User following);
 
-  long countByFollowing(User following);
+  /** 팔로워 목록 — 활성 팔로우만. */
+  @Query(
+      "SELECT f FROM Follow f JOIN FETCH f.follower WHERE f.following = :user AND f.deleted = false")
+  Page<Follow> findActiveFollowersByUser(@Param("user") User user, Pageable pageable);
 
-  long countByFollower(User follower);
+  /** 팔로잉 목록 — 활성 팔로우만. */
+  @Query(
+      "SELECT f FROM Follow f JOIN FETCH f.following WHERE f.follower = :user AND f.deleted = false")
+  Page<Follow> findActiveFollowingsByUser(@Param("user") User user, Pageable pageable);
 }
