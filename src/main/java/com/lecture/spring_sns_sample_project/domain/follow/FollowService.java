@@ -188,8 +188,8 @@ public class FollowService {
     return new FollowCountResult(count.getFollowersCount(), count.getFolloweesCount());
   }
 
-  /** 팔로워/팔로잉 수 — Service 반환 값 객체. */
-  public record FollowCountResult(long followerCount, long followeesCount) {}
+  /** 팔로워/팔로이 수 — Service 반환 값 객체. 도메인(FollowCount) 네이밍과 통일. */
+  public record FollowCountResult(long followersCount, long followeesCount) {}
 
   /**
    * FollowCount 원자적 갱신 — user_id 오름차순으로 UPDATE 하여 데드락을 방지한다.
