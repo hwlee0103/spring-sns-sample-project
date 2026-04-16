@@ -10,24 +10,23 @@ import com.lecture.spring_sns_sample_project.controller.dto.UserUpdateRequest;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserService;
 import com.lecture.spring_sns_sample_project.domain.user.security.AuthUser;
+import com.lecture.spring_sns_sample_project.domain.user.security.SessionCleanupService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import java.net.URI;
+import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
-import org.springframework.lang.Nullable;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.context.SecurityContextRepository;
-import org.springframework.session.FindByIndexNameSessionRepository;
-import org.springframework.session.Session;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -37,23 +36,13 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
+@RequiredArgsConstructor
 public class UserController {
 
   private final UserService userService;
   private final SecurityContextRepository securityContextRepository;
-  @Nullable private final FindByIndexNameSessionRepository<? extends Session> sessionRepository;
+  private final SessionCleanupService sessionCleanupService;
   private final TokenVersionFilter tokenVersionFilter;
-
-  public UserController(
-      UserService userService,
-      SecurityContextRepository securityContextRepository,
-      @Nullable FindByIndexNameSessionRepository<? extends Session> sessionRepository,
-      TokenVersionFilter tokenVersionFilter) {
-    this.userService = userService;
-    this.securityContextRepository = securityContextRepository;
-    this.sessionRepository = sessionRepository;
-    this.tokenVersionFilter = tokenVersionFilter;
-  }
 
   @PostMapping("/api/user")
   public ResponseEntity<UserResponse> register(@Valid @RequestBody UserCreateRequest request) {
@@ -110,7 +99,8 @@ public class UserController {
     tokenVersionFilter.evict(id);
 
     // Redis 에서 해당 사용자의 다른 디바이스 세션을 즉시 삭제
-    invalidateOtherSessions(authUser.getEmail(), httpRequest.getSession().getId());
+    sessionCleanupService.invalidateOtherSessions(
+        authUser.getEmail(), httpRequest.getSession().getId());
 
     return ResponseEntity.noContent().build();
   }
@@ -124,7 +114,7 @@ public class UserController {
     userService.delete(id);
 
     // 삭제된 계정의 모든 세션을 Redis 에서 즉시 제거
-    invalidateAllSessions(authUser.getEmail());
+    sessionCleanupService.invalidateAllSessions(authUser.getEmail());
 
     // 현재 세션도 무효화
     HttpSession session = httpRequest.getSession(false);
@@ -141,31 +131,6 @@ public class UserController {
     if (authUser == null || !authUser.getId().equals(targetId)) {
       throw new AccessDeniedException("본인의 리소스만 수정/삭제할 수 있습니다.");
     }
-  }
-
-  /** 계정 삭제 시 해당 사용자의 모든 세션을 Redis 에서 즉시 삭제. Redis 미사용 환경에서는 no-op. */
-  private void invalidateAllSessions(String email) {
-    if (sessionRepository == null) {
-      return;
-    }
-    sessionRepository
-        .findByPrincipalName(email)
-        .forEach((sessionId, session) -> sessionRepository.deleteById(sessionId));
-  }
-
-  /** 비밀번호 변경 시 현재 세션을 제외한 해당 사용자의 모든 세션을 Redis 에서 즉시 삭제. Redis 미사용 환경에서는 no-op. */
-  private void invalidateOtherSessions(String email, String currentSessionId) {
-    if (sessionRepository == null) {
-      return;
-    }
-    sessionRepository
-        .findByPrincipalName(email)
-        .forEach(
-            (sessionId, session) -> {
-              if (!sessionId.equals(currentSessionId)) {
-                sessionRepository.deleteById(sessionId);
-              }
-            });
   }
 
   /** 비밀번호 변경 후 현재 세션의 AuthUser 를 새 tokenVersion 으로 갱신. */
