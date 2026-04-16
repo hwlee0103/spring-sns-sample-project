@@ -103,7 +103,13 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.GET, "/api/post", "/api/post/*")
                     .permitAll()
                     .requestMatchers(
-                        HttpMethod.GET, "/api/user", "/api/user/*", "/api/user/by-nickname/*")
+                        HttpMethod.GET,
+                        "/api/user",
+                        "/api/user/*",
+                        "/api/user/by-nickname/*",
+                        "/api/user/*/followers",
+                        "/api/user/*/followings",
+                        "/api/user/*/follow/count")
                     .permitAll()
                     .requestMatchers("/api/admin/**")
                     .hasRole("ADMIN")

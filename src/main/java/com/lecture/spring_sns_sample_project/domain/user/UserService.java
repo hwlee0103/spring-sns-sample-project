@@ -1,5 +1,7 @@
 package com.lecture.spring_sns_sample_project.domain.user;
 
+import com.lecture.spring_sns_sample_project.domain.follow.FollowCount;
+import com.lecture.spring_sns_sample_project.domain.follow.FollowCountRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -13,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class UserService {
 
   private final UserRepository userRepository;
+  private final FollowCountRepository followCountRepository;
   private final PasswordEncoder passwordEncoder;
 
   /**
@@ -20,7 +23,10 @@ public class UserService {
    *
    * <p>raw 입력값을 검증한 뒤 비밀번호를 인코딩하여 Entity 를 생성한다. Service 가 인코딩을 책임진다 (Entity 는 PasswordEncoder 에
    * 의존하지 않음).
+   *
+   * <p>회원 생성과 함께 {@link FollowCount} 초기행(0, 0)을 동시에 생성하여, 프로필 조회 시 null 처리 없이 카운트를 반환할 수 있도록 한다.
    */
+  @Transactional
   public User register(String email, String rawPassword, String nickname) {
     validateEmail(email);
     validateRawPassword(rawPassword);
@@ -35,15 +41,18 @@ public class UserService {
 
     User user = new User(email, passwordEncoder.encode(rawPassword), nickname);
     try {
-      return userRepository.save(user);
+      userRepository.save(user);
     } catch (DataIntegrityViolationException e) {
-      // exists 체크와 save 사이 race condition 방어 — DB unique 제약으로 최종 보장
-      // email 또는 nickname 둘 중 어느 쪽인지 재확인
       if (userRepository.existsByEmail(email)) {
         throw UserException.emailAlreadyExists(email);
       }
       throw UserException.nicknameAlreadyExists(nickname);
     }
+
+    // FollowCount 초기행 생성 — 팔로워/팔로이 수 0으로 시작
+    followCountRepository.save(new FollowCount(user));
+
+    return user;
   }
 
   public User getById(Long id) {
