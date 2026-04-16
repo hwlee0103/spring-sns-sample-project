@@ -23,12 +23,12 @@ public class AuthEventListener {
 
   @EventListener
   public void onSuccess(AuthenticationSuccessEvent event) {
-    audit.info("LOGIN_SUCCESS user={}", sanitize(event.getAuthentication().getName()));
+    audit.info("LOGIN_SUCCESS user={}", maskEmail(event.getAuthentication().getName()));
   }
 
   @EventListener
   public void onFailure(AbstractAuthenticationFailureEvent event) {
-    String username = sanitize(event.getAuthentication().getName());
+    String username = maskEmail(event.getAuthentication().getName());
     String reason = event.getException().getClass().getSimpleName();
     audit.warn("LOGIN_FAILURE user={} reason={}", username, reason);
   }
@@ -37,7 +37,7 @@ public class AuthEventListener {
   public void onLogout(LogoutSuccessEvent event) {
     String username =
         event.getAuthentication() != null
-            ? sanitize(event.getAuthentication().getName())
+            ? maskEmail(event.getAuthentication().getName())
             : "unknown";
     audit.info("LOGOUT user={}", username);
   }
@@ -63,6 +63,30 @@ public class AuthEventListener {
       return "null";
     }
     return input.replaceAll("[\\r\\n\\t]", "_");
+  }
+
+  /**
+   * email 부분 마스킹 + log injection 방어.
+   *
+   * <p>로그 파일 유출 시 시도된 email 리스트가 그대로 노출되는 것을 방지. 로컬 파트 앞 2자만 남기고 마스킹한다.
+   *
+   * <pre>
+   * "alice@example.com"  → "al***@example.com"
+   * "bob@test.com"       → "bo***@test.com"
+   * "x@a.com"            → "x***@a.com"
+   * "invalid"            → "invalid" (email 형식 아닌 경우 sanitize 만)
+   * </pre>
+   */
+  private static String maskEmail(String input) {
+    String safe = sanitize(input);
+    int atIdx = safe.indexOf('@');
+    if (atIdx < 0) {
+      return safe; // email 형식 아님
+    }
+    String local = safe.substring(0, atIdx);
+    String domain = safe.substring(atIdx);
+    int keep = Math.min(2, local.length());
+    return local.substring(0, keep) + "***" + domain;
   }
 
   /** 세션 ID 전체 노출은 로그 유출 시 세션 하이재킹 벡터가 된다. 앞 8자만 기록. */
