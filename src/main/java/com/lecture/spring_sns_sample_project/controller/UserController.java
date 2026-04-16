@@ -1,5 +1,6 @@
 package com.lecture.spring_sns_sample_project.controller;
 
+import com.lecture.spring_sns_sample_project.config.TokenVersionFilter;
 import com.lecture.spring_sns_sample_project.controller.dto.ChangePasswordRequest;
 import com.lecture.spring_sns_sample_project.controller.dto.PageResponse;
 import com.lecture.spring_sns_sample_project.controller.dto.UserCreateRequest;
@@ -11,6 +12,7 @@ import com.lecture.spring_sns_sample_project.domain.user.UserService;
 import com.lecture.spring_sns_sample_project.domain.user.security.AuthUser;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import java.net.URI;
 import org.springframework.data.domain.Pageable;
@@ -18,6 +20,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.lang.Nullable;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContext;
@@ -39,13 +42,13 @@ public class UserController {
   private final UserService userService;
   private final SecurityContextRepository securityContextRepository;
   @Nullable private final FindByIndexNameSessionRepository<? extends Session> sessionRepository;
-  private final com.lecture.spring_sns_sample_project.config.TokenVersionFilter tokenVersionFilter;
+  private final TokenVersionFilter tokenVersionFilter;
 
   public UserController(
       UserService userService,
       SecurityContextRepository securityContextRepository,
       @Nullable FindByIndexNameSessionRepository<? extends Session> sessionRepository,
-      com.lecture.spring_sns_sample_project.config.TokenVersionFilter tokenVersionFilter) {
+      TokenVersionFilter tokenVersionFilter) {
     this.userService = userService;
     this.securityContextRepository = securityContextRepository;
     this.sessionRepository = sessionRepository;
@@ -124,7 +127,7 @@ public class UserController {
     invalidateAllSessions(authUser.getEmail());
 
     // 현재 세션도 무효화
-    jakarta.servlet.http.HttpSession session = httpRequest.getSession(false);
+    HttpSession session = httpRequest.getSession(false);
     if (session != null) {
       session.invalidate();
     }
@@ -136,8 +139,7 @@ public class UserController {
   /** 본인 리소스인지 검증 — IDOR(Insecure Direct Object Reference) 방어. */
   private static void requireOwnership(AuthUser authUser, Long targetId) {
     if (authUser == null || !authUser.getId().equals(targetId)) {
-      throw new org.springframework.security.access.AccessDeniedException(
-          "본인의 리소스만 수정/삭제할 수 있습니다.");
+      throw new AccessDeniedException("본인의 리소스만 수정/삭제할 수 있습니다.");
     }
   }
 
