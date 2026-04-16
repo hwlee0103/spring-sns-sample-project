@@ -19,13 +19,21 @@ public interface FollowRepository extends JpaRepository<Follow, Long> {
   /** 활성 팔로우만 조회. */
   Optional<Follow> findByFollowerAndFollowingAndDeletedFalse(User follower, User following);
 
-  /** 팔로워 목록 — 활성 팔로우만. */
+  /**
+   * 팔로워 목록 — 활성 팔로우만. fetch join 으로 follower User 즉시 로딩(N+1 방지).
+   *
+   * <p>countQuery 명시로 페이징 성능 최적화 — JOIN FETCH 제외한 COUNT 만 실행.
+   */
   @Query(
-      "SELECT f FROM Follow f JOIN FETCH f.follower WHERE f.following = :user AND f.deleted = false")
+      value =
+          "SELECT f FROM Follow f JOIN FETCH f.follower WHERE f.following = :user AND f.deleted = false",
+      countQuery = "SELECT COUNT(f) FROM Follow f WHERE f.following = :user AND f.deleted = false")
   Page<Follow> findActiveFollowersByUser(@Param("user") User user, Pageable pageable);
 
-  /** 팔로잉 목록 — 활성 팔로우만. */
+  /** 팔로잉 목록 — 활성 팔로우만. fetch join 으로 following User 즉시 로딩. */
   @Query(
-      "SELECT f FROM Follow f JOIN FETCH f.following WHERE f.follower = :user AND f.deleted = false")
+      value =
+          "SELECT f FROM Follow f JOIN FETCH f.following WHERE f.follower = :user AND f.deleted = false",
+      countQuery = "SELECT COUNT(f) FROM Follow f WHERE f.follower = :user AND f.deleted = false")
   Page<Follow> findActiveFollowingsByUser(@Param("user") User user, Pageable pageable);
 }

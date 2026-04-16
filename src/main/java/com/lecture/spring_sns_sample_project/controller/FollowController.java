@@ -14,6 +14,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,6 +31,7 @@ public class FollowController {
   @PostMapping("/api/user/{id}/follow")
   public ResponseEntity<FollowResponse> follow(
       @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
+    requireAuth(authUser);
     Follow follow = followService.follow(authUser.getId(), id);
     return ResponseEntity.created(URI.create("/api/user/" + id + "/follow"))
         .body(FollowResponse.from(follow));
@@ -38,6 +40,7 @@ public class FollowController {
   @DeleteMapping("/api/user/{id}/follow")
   public ResponseEntity<Void> unfollow(
       @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
+    requireAuth(authUser);
     followService.unfollow(authUser.getId(), id);
     return ResponseEntity.noContent().build();
   }
@@ -72,7 +75,14 @@ public class FollowController {
   @GetMapping("/api/user/{id}/follow/status")
   public ResponseEntity<FollowStatusResponse> getFollowStatus(
       @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
+    requireAuth(authUser);
     boolean isFollowing = followService.isFollowing(authUser.getId(), id);
     return ResponseEntity.ok(new FollowStatusResponse(isFollowing));
+  }
+
+  private static void requireAuth(AuthUser authUser) {
+    if (authUser == null) {
+      throw new AccessDeniedException("인증이 필요합니다.");
+    }
   }
 }
