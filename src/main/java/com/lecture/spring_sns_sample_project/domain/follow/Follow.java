@@ -9,6 +9,7 @@ import jakarta.persistence.ForeignKey;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
@@ -19,7 +20,12 @@ import lombok.Getter;
 @Entity
 @Table(
     name = "follows",
-    uniqueConstraints = @UniqueConstraint(columnNames = {"follower_id", "following_id"}))
+    uniqueConstraints = @UniqueConstraint(columnNames = {"follower_id", "following_id"}),
+    indexes = {
+      @Index(name = "idx_follows_following_id", columnList = "following_id"),
+      @Index(name = "idx_follows_following_created", columnList = "following_id, created_at DESC"),
+      @Index(name = "idx_follows_follower_created", columnList = "follower_id, created_at DESC")
+    })
 @Getter
 public class Follow {
 
