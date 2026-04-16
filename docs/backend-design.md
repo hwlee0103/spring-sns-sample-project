@@ -469,6 +469,64 @@ Thread B: unfollow(1, 2) → findByFollowerAndFollowing → 아직 INSERT 미커
 | **멱등성 보장** | 이미 팔로우 중이면 409 반환. count 는 중복 갱신 안 됨 |
 | **권장**: 클라이언트 | 409 응답을 "이미 팔로우 중" 으로 처리 (에러가 아닌 성공으로 취급) |
 
+**팔로우 동시 요청 처리 정책**
+
+UNIQUE 제약 `(follower_id, following_id)` 이 보호하는 범위와, 각 상황별 기대 동작을 명확히 정의한다.
+
+***정책 1: 서로 다른 사용자가 같은 대상을 동시 팔로우 → 둘 다 반드시 성공***
+
+```
+A → X 팔로우:  UNIQUE 쌍 = (A, X)
+B → X 팔로우:  UNIQUE 쌍 = (B, X)  ← 다른 쌍. 충돌 없음
+
+Thread A: INSERT (A, X) → 성공
+Thread B: INSERT (B, X) → 성공   ← UNIQUE 검사 대상이 다르므로 서로 독립
+FollowCount: X 의 followers_count + 1 (A) → + 1 (B) = +2 (DB 원자적 UPDATE 직렬화)
+
+→ 누락 없음. 둘 다 201 Created
+```
+
+| 항목 | 동작 |
+|------|------|
+| Follow INSERT | 다른 UNIQUE 쌍 → **충돌 없음** → 둘 다 성공 |
+| FollowCount UPDATE | 같은 행(X) 대상 → DB 행 잠금으로 **순차 +1** → 갱신 손실 없음 |
+| 클라이언트 응답 | 둘 다 **201 Created** |
+
+***정책 2: 같은 사용자가 같은 대상을 중복 팔로우 → 하나만 성공, 나머지 409***
+
+```
+A → X 팔로우 (1차):  UNIQUE 쌍 = (A, X)
+A → X 팔로우 (2차):  UNIQUE 쌍 = (A, X)  ← 같은 쌍. 충돌
+
+[대부분의 경우 — existsBy 사전 차단]
+  2차 요청: existsBy(A, X) = true → 409 alreadyFollowing (예외 없이 SELECT로 판단)
+
+[드문 경우 — 동시 도착 (race condition)]
+  Thread 1: existsBy = false → INSERT (A, X) → 성공 → count +1
+  Thread 2: existsBy = false → INSERT (A, X) → UNIQUE 위반 → catch → 409
+            → count +1 실행 안 됨 (catch에서 throw → 코드 미도달)
+
+→ 의도된 차단. 누락이 아닌 중복 방지. FollowCount 정합성 유지
+```
+
+| 항목 | 동작 |
+|------|------|
+| Follow INSERT | 같은 UNIQUE 쌍 → 1차 성공, **2차는 UNIQUE 위반** |
+| FollowCount UPDATE | INSERT 성공한 건만 count 갱신. **실패한 건은 count 미변경** |
+| 클라이언트 응답 | 1차 **201**, 2차 **409** (클라이언트는 409 를 "이미 팔로우 중"으로 처리) |
+
+***정책 3: UNIQUE 제약의 역할 정리***
+
+```
+UNIQUE (follower_id, following_id) 이 보호하는 것:
+  ✅ 같은 쌍의 중복 삽입 방지         — (A, X) 는 1행만 존재 가능
+  ❌ 다른 쌍의 동시 삽입을 막지 않음   — (A, X) 와 (B, X) 는 독립
+
+보호 범위를 벗어나는 것 (별도 방어 필요):
+  → FollowCount 갱신 손실: DB 원자적 UPDATE 로 방어
+  → 데드락: user_id 오름차순 잠금 순서로 방어
+```
+
 **중복 삽입 해결책 비교**
 
 | # | 방식 | DB 의존 | 예외 발생 | 쿼리 수 | 적합도 |
