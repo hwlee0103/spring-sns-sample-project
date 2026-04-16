@@ -4,8 +4,11 @@ import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserRepository;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,6 +34,10 @@ public class FollowService {
    * → 어느 단계에서든 실패 시 전체 롤백
    * </pre>
    */
+  @Retryable(
+      retryFor = TransientDataAccessException.class,
+      maxAttempts = 3,
+      backoff = @Backoff(delay = 100, multiplier = 2))
   @Transactional
   public Follow follow(Long followerId, Long followingId) {
     // 1. 입력 검증
@@ -88,6 +95,10 @@ public class FollowService {
    * 5. FollowCount 원자적 갱신
    * </pre>
    */
+  @Retryable(
+      retryFor = TransientDataAccessException.class,
+      maxAttempts = 3,
+      backoff = @Backoff(delay = 100, multiplier = 2))
   @Transactional
   public void unfollow(Long followerId, Long followingId) {
     if (followerId == null) {
