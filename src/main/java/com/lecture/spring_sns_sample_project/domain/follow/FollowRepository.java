@@ -1,16 +1,25 @@
 package com.lecture.spring_sns_sample_project.domain.follow;
 
 import com.lecture.spring_sns_sample_project.domain.user.User;
+import jakarta.persistence.LockModeType;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface FollowRepository extends JpaRepository<Follow, Long> {
 
-  /** deleted 상관없이 조회 — 재팔로우 시 기존 행 복원에 사용. */
+  /**
+   * deleted 상관없이 조회 + 비관적 쓰기 잠금 — 재팔로우 시 기존 행 복원에 사용.
+   *
+   * <p>동시 재팔로우 요청 시 두 스레드가 모두 {@code isDeleted()==true} 를 읽고 {@code restore()} + 카운트
+   * double-increment 하는 것을 방지한다. 행 잠금으로 한 스레드만 restore 를 수행하고, 다른 스레드는 {@code isDeleted()==false} 를
+   * 읽어 {@code alreadyFollowing} 을 반환한다.
+   */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
   Optional<Follow> findByFollowerAndFollowing(User follower, User following);
 
   /** 활성 팔로우만 존재 여부 확인. */
