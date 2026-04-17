@@ -737,79 +737,93 @@ public class FollowCount {
         this.followersCount = 0;
         this.followeesCount = 0;
     }
-
-    /** 팔로우 발생 시 — 대상의 followersCount +1 */
-    public void incrementFollowers() {
-        this.followersCount++;
-    }
-
-    /** 언팔로우 발생 시 — 대상의 followersCount -1 (음수 방지) */
-    public void decrementFollowers() {
-        if (this.followersCount > 0) this.followersCount--;
-    }
-
-    /** 팔로우 발생 시 — 행위자의 followeesCount +1 */
-    public void incrementFollowees() {
-        this.followeesCount++;
-    }
-
-    /** 언팔로우 발생 시 — 행위자의 followeesCount -1 (음수 방지) */
-    public void decrementFollowees() {
-        if (this.followeesCount > 0) this.followeesCount--;
-    }
 }
 ```
+
+> **참고**: 초기 설계에서는 Entity 에 `incrementFollowers()` / `decrementFollowers()` 등 카운트 변경 메서드를 두었으나,
+> 동시성 검토(방안 3) 결과 **DB 원자적 UPDATE** 가 lost update 를 원천 차단하므로 Entity 메서드를 제거하고
+> `FollowCountRepository` 의 `@Modifying @Query` 로 대체했다.
 
 **Repository 설계**
 
 ```java
 public interface FollowCountRepository extends JpaRepository<FollowCount, Long> {
 
-    Optional<FollowCount> findByUser(User user);
-
     Optional<FollowCount> findByUserId(Long userId);
+
+    /** 사용자 삭제 시 FollowCount 행 물리 삭제. */
+    @Modifying
+    @Query("DELETE FROM FollowCount fc WHERE fc.user.id = :userId")
+    void deleteByUserId(@Param("userId") Long userId);
+
+    /** 팔로워 수 +1 — DB 원자적 UPDATE 로 lost update 방지. */
+    @Modifying
+    @Query("UPDATE FollowCount fc SET fc.followersCount = fc.followersCount + 1 WHERE fc.user.id = :userId")
+    int incrementFollowersCount(@Param("userId") Long userId);
+
+    /** 팔로워 수 -1 — 음수 방지 조건 포함. */
+    @Modifying
+    @Query("UPDATE FollowCount fc SET fc.followersCount = fc.followersCount - 1 WHERE fc.user.id = :userId AND fc.followersCount > 0")
+    int decrementFollowersCount(@Param("userId") Long userId);
+
+    /** 팔로이 수 +1. */
+    @Modifying
+    @Query("UPDATE FollowCount fc SET fc.followeesCount = fc.followeesCount + 1 WHERE fc.user.id = :userId")
+    int incrementFolloweesCount(@Param("userId") Long userId);
+
+    /** 팔로이 수 -1. */
+    @Modifying
+    @Query("UPDATE FollowCount fc SET fc.followeesCount = fc.followeesCount - 1 WHERE fc.user.id = :userId AND fc.followeesCount > 0")
+    int decrementFolloweesCount(@Param("userId") Long userId);
 }
 ```
 
 **FollowService 연동 — 팔로우/언팔로우 시 카운트 갱신**
 
 ```java
+@Retryable(
+    retryFor = TransientDataAccessException.class,
+    maxAttempts = 3,
+    backoff = @Backoff(delay = 100, multiplier = 2))
 @Transactional
 public Follow follow(Long followerId, Long followingId) {
-    // ... 기존 검증 + Follow 저장 ...
-
-    // 카운트 갱신 (없으면 생성)
-    FollowCount followerCount = followCountRepository.findByUser(follower)
-        .orElseGet(() -> followCountRepository.save(new FollowCount(follower)));
-    FollowCount followingCount = followCountRepository.findByUser(following)
-        .orElseGet(() -> followCountRepository.save(new FollowCount(following)));
-
-    followerCount.incrementFollowees();   // 행위자: 내가 팔로우하는 수 +1
-    followingCount.incrementFollowers();  // 대상: 나를 팔로우하는 수 +1
-
+    // 1. 입력 검증 (null, 셀프 팔로우)
+    // 2. 사용자 존재 확인
+    // 2-1. ensureFollowCountExists (마이그레이션 이전 계정 방어)
+    // 3. 기존 행 조회 — @Lock(PESSIMISTIC_WRITE) 로 동시 restore 방지 (#151)
+    //    - 활성 → alreadyFollowing(409)
+    //    - soft deleted → restore() (재팔로우)
+    //    - 없음 → new Follow INSERT (UNIQUE 위반 시 409 변환)
+    // 4. FollowCount 원자적 갱신 — user_id 오름차순 (데드락 방지)
+    updateFollowCounts(followerId, followingId, true);
     return follow;
 }
 
-@Transactional
-public void unfollow(Long followerId, Long followingId) {
-    // ... 기존 검증 + Follow 삭제 ...
-
-    followCountRepository.findByUser(follower)
-        .ifPresent(FollowCount::decrementFollowees);
-    followCountRepository.findByUser(following)
-        .ifPresent(FollowCount::decrementFollowers);
+/** FollowCount 원자적 갱신 — user_id 오름차순으로 UPDATE 하여 데드락을 방지. */
+private void updateFollowCounts(Long followerId, Long followingId, boolean increment) {
+    Long smallerId = Math.min(followerId, followingId);
+    if (increment) {
+        if (smallerId.equals(followerId)) {
+            followCountRepository.incrementFolloweesCount(followerId);
+            followCountRepository.incrementFollowersCount(followingId);
+        } else {
+            followCountRepository.incrementFollowersCount(followingId);
+            followCountRepository.incrementFolloweesCount(followerId);
+        }
+    } else {
+        // decrement 도 동일 순서
+        // ...
+    }
 }
 ```
 
 **카운트 조회 — O(1)**
 
 ```java
-public FollowCountResponse getFollowCount(Long userId) {
-    User user = userRepository.findById(userId)
+public FollowCountResult getFollowCount(Long userId) {
+    FollowCount count = followCountRepository.findByUserId(userId)
         .orElseThrow(() -> FollowException.userNotFound(userId));
-    FollowCount count = followCountRepository.findByUser(user)
-        .orElse(new FollowCount(user));  // 행이 없으면 0, 0
-    return new FollowCountResponse(count.getFollowersCount(), count.getFolloweesCount());
+    return new FollowCountResult(count.getFollowersCount(), count.getFolloweesCount());
 }
 ```
 
@@ -822,7 +836,7 @@ public FollowCountResponse getFollowCount(Long userId) {
 | **회원가입 시 생성 (권장)** | 카운트 조회 시 항상 행이 존재 → null 처리 불필요 | 가입 트랜잭션에 1회 INSERT 추가 |
 | Lazy 생성 (첫 팔로우 시) | 가입 시 추가 비용 없음 | 팔로우 적 없는 사용자 조회 시 행 없음 → null 처리 필요 |
 
-> **권장**: 회원가입 시 `FollowCount(user)` 행을 함께 생성한다. 프로필 페이지에서 항상 조회되므로.
+> **구현 완료**: 회원가입 시 `UserService.register()` → `followCountRepository.save(new FollowCount(user))` 로 초기행 동반 생성. `@Transactional` 로 묶여 실패 시 전체 롤백 (§5.7).
 
 **2. 동시성 — race condition 방어**
 
@@ -831,27 +845,28 @@ public FollowCountResponse getFollowCount(Long userId) {
 // A: followersCount = 10 → +1 = 11
 // B: followersCount = 10 → +1 = 11  (A 의 갱신을 못 봄)
 // 결과: 실제 12 인데 11 로 저장 (lost update)
-
-// 해결 방안 1: 비관적 잠금 (추천)
-@Lock(LockModeType.PESSIMISTIC_WRITE)
-@Query("SELECT fc FROM FollowCount fc WHERE fc.user = :user")
-Optional<FollowCount> findByUserForUpdate(@Param("user") User user);
-
-// 해결 방안 2: 낙관적 잠금 (@Version)
-@Version
-private Long version;
-
-// 해결 방안 3: DB 레벨 원자적 UPDATE (가장 안전)
-@Modifying
-@Query("UPDATE FollowCount fc SET fc.followersCount = fc.followersCount + 1 WHERE fc.user = :user")
-void incrementFollowersCount(@Param("user") User user);
-
-@Modifying
-@Query("UPDATE FollowCount fc SET fc.followersCount = fc.followersCount - 1 WHERE fc.user = :user AND fc.followersCount > 0")
-void decrementFollowersCount(@Param("user") User user);
 ```
 
-> **권장**: **방안 3 (DB 원자적 UPDATE)** — `SET count = count + 1` 은 DB 레벨에서 원자적이므로 lost update 가 발생하지 않는다. JPA dirty checking 대신 `@Modifying @Query` 사용.
+| 방안 | 장점 | 단점 | 채택 |
+|------|------|------|------|
+| 1. 비관적 잠금 (`@Lock(PESSIMISTIC_WRITE)`) | 확실한 직렬화 | DB 행 잠금 비용, 대기 시간 | ❌ |
+| 2. 낙관적 잠금 (`@Version`) | 잠금 없이 충돌 감지 | 재시도 구현 필요, 높은 충돌률 시 비효율 | ❌ |
+| **3. DB 원자적 UPDATE** | lost update 원천 차단, 잠금 불필요 | `@Modifying @Query` 필요 | ✅ **채택** |
+
+```java
+// 채택: 방안 3 — DB 원자적 UPDATE
+@Modifying
+@Query("UPDATE FollowCount fc SET fc.followersCount = fc.followersCount + 1 WHERE fc.user.id = :userId")
+int incrementFollowersCount(@Param("userId") Long userId);
+
+@Modifying
+@Query("UPDATE FollowCount fc SET fc.followersCount = fc.followersCount - 1 WHERE fc.user.id = :userId AND fc.followersCount > 0")
+int decrementFollowersCount(@Param("userId") Long userId);
+```
+
+> **구현 완료**: 방안 3 채택. `SET count = count + 1` 은 DB 레벨에서 원자적이므로 lost update 가 발생하지 않는다. user_id 오름차순 UPDATE 순서로 데드락도 방지.
+>
+> **추가 방어**: `findByFollowerAndFollowing` 에 `@Lock(PESSIMISTIC_WRITE)` 적용(#151) — soft-deleted follow 복원 시 동시 `restore()` + double-increment 방지. 카운트 갱신 자체가 아닌 Follow 행 읽기 경합을 잠금으로 해결.
 
 **3. 정합성 보장 — 카운트 보정 배치**
 
@@ -870,25 +885,21 @@ UPDATE follow_counts fc SET
 
 팔로우/언팔로우 시 `Follow` 저장과 `FollowCount` 갱신이 **하나의 트랜잭션**에서 처리되어야 한다. 분리하면 Follow 는 생성되었는데 카운트는 미갱신되는 상태가 발생.
 
-```java
-@Transactional  // follow + count 갱신을 단일 트랜잭션으로
-public Follow follow(Long followerId, Long followingId) {
-    Follow follow = followRepository.save(new Follow(follower, following));
-    followCountRepository.incrementFolloweesCount(follower);
-    followCountRepository.incrementFollowersCount(following);
-    return follow;
-}
-```
+> **구현 완료**: `FollowService.follow()` / `unfollow()` 에 `@Transactional` 적용. Follow INSERT/soft delete + FollowCount atomic UPDATE 가 단일 트랜잭션으로 묶임.
 
 **5. 설계 결정 요약**
 
-| 결정 | 선택 | 근거 |
-|------|------|------|
-| 별도 테이블 vs User 컬럼 | **별도 테이블** | User entity 에 count 컬럼 추가 시 모든 User 조회에 count 가 따라옴. 관심사 분리 |
-| 생성 시점 | **회원가입 시** | 프로필 조회 시 항상 필요. null 처리 제거 |
-| 동시성 | **DB 원자적 UPDATE** | lost update 방지. 잠금 불필요 |
-| 정합성 | **주기적 보정 배치** | 100% 실시간 정합 불필요. 배치로 복원 |
-| Entity 필드명 | `followersCount` / `followeesCount` | `followingCount` 는 동사/명사 혼동. `followees` 가 명확 |
+| 결정 | 선택 | 근거 | 구현 |
+|------|------|------|------|
+| 별도 테이블 vs User 컬럼 | **별도 테이블** | User entity 에 count 컬럼 추가 시 모든 User 조회에 count 가 따라옴. 관심사 분리 | ✅ `follow_counts` |
+| 생성 시점 | **회원가입 시** | 프로필 조회 시 항상 필요. null 처리 제거 | ✅ `UserService.register()` |
+| 동시성 | **DB 원자적 UPDATE** | lost update 방지. 잠금 불필요 | ✅ `@Modifying @Query` |
+| 재팔로우 동시성 | **비관적 잠금** | soft-deleted 행 동시 restore 방지 (#151) | ✅ `@Lock(PESSIMISTIC_WRITE)` |
+| 데드락 방지 | **user_id 오름차순 UPDATE** | 항상 같은 순서로 행 접근 | ✅ `updateFollowCounts()` |
+| 재시도 | **spring-retry @Retryable** | TransientDataAccessException 3회 재시도 | ✅ `follow()/unfollow()` |
+| 삭제 정책 | **Soft Delete** | 재팔로우 복원, 감사 추적 | ✅ `Follow.softDelete()/restore()` |
+| 정합성 | **주기적 보정 배치** | 100% 실시간 정합 불필요. 배치로 복원 | ⬜ 미구현 (§13 TODO) |
+| Entity 필드명 | `followersCount` / `followeesCount` | `followingCount` 는 동사/명사 혼동. `followees` 가 명확 | ✅ |
 
 ## 5. API 계약
 
@@ -980,7 +991,7 @@ public Follow follow(Long followerId, Long followingId) {
 **GET /api/user/{id}/follow/count** — 팔로워/팔로잉 수
 ```json
 // Response 200
-{ "followerCount": 42, "followingCount": 15 }
+{ "followersCount": 42, "followeesCount": 15 }
 ```
 
 **GET /api/user/{id}/follow/status** — 팔로우 여부 확인
@@ -1023,8 +1034,8 @@ public record FollowUserResponse(
     }
 }
 
-// 팔로워/팔로잉 카운트
-public record FollowCountResponse(long followerCount, long followingCount) {}
+// 팔로워/팔로잉 카운트 — 도메인(FollowCount) 네이밍과 통일 (#137)
+public record FollowCountResponse(long followersCount, long followeesCount) {}
 
 // 팔로우 여부
 public record FollowStatusResponse(boolean following) {}
@@ -1041,8 +1052,8 @@ public class FollowController {
 
     @PostMapping("/api/user/{id}/follow")
     public ResponseEntity<FollowResponse> follow(
-            @PathVariable Long id,
-            @AuthenticationPrincipal AuthUser authUser) {
+            @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
+        requireAuth(authUser);  // null 방어 (#138)
         Follow follow = followService.follow(authUser.getId(), id);
         return ResponseEntity.created(URI.create("/api/user/" + id + "/follow"))
             .body(FollowResponse.from(follow));
@@ -1050,8 +1061,8 @@ public class FollowController {
 
     @DeleteMapping("/api/user/{id}/follow")
     public ResponseEntity<Void> unfollow(
-            @PathVariable Long id,
-            @AuthenticationPrincipal AuthUser authUser) {
+            @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
+        requireAuth(authUser);
         followService.unfollow(authUser.getId(), id);
         return ResponseEntity.noContent().build();
     }
@@ -1076,15 +1087,23 @@ public class FollowController {
 
     @GetMapping("/api/user/{id}/follow/count")
     public ResponseEntity<FollowCountResponse> getFollowCount(@PathVariable Long id) {
-        return ResponseEntity.ok(followService.getFollowCount(id));
+        FollowService.FollowCountResult count = followService.getFollowCount(id);
+        return ResponseEntity.ok(
+            new FollowCountResponse(count.followersCount(), count.followeesCount()));
     }
 
     @GetMapping("/api/user/{id}/follow/status")
     public ResponseEntity<FollowStatusResponse> getFollowStatus(
-            @PathVariable Long id,
-            @AuthenticationPrincipal AuthUser authUser) {
+            @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
+        requireAuth(authUser);
         boolean isFollowing = followService.isFollowing(authUser.getId(), id);
         return ResponseEntity.ok(new FollowStatusResponse(isFollowing));
+    }
+
+    private static void requireAuth(AuthUser authUser) {
+        if (authUser == null) {
+            throw new AccessDeniedException("인증이 필요합니다.");
+        }
     }
 }
 ```
@@ -1176,8 +1195,7 @@ public Follow follow(Long followerId, Long followingId) { ... }
 | maxAttempts | 3 | 3회 시도 후 포기 → 500 반환 |
 | delay | 100ms, ×2 배수 | 짧은 간격 + 지수 백오프. DB 부하 완화 |
 
-> **현재 구현**: 데드락 방지를 위해 user_id 오름차순 잠금 순서를 적용했으므로 데드락 발생 확률은 극히 낮다. 재시도는 예외적 상황(DB 순간 장애)에 대한 안전망이다.
-> **향후**: `spring-boot-starter-aop` + `spring-retry` 의존성 추가 시 `@Retryable` 적용. 현재는 설계만 정의하고, 운영 단계에서 도입.
+> **구현 완료**: `spring-retry:2.0.12` + `@Retryable` 적용. 데드락 방지를 위해 user_id 오름차순 잠금 순서도 적용했으므로 데드락 발생 확률은 극히 낮다. 재시도는 예외적 상황(DB 순간 장애)에 대한 안전망이다.
 
 ### 5.6 삭제 정책 (Soft Delete)
 
