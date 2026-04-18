@@ -1,5 +1,6 @@
 package com.lecture.spring_sns_sample_project.domain.like;
 
+import com.lecture.spring_sns_sample_project.domain.post.Post;
 import com.lecture.spring_sns_sample_project.domain.post.PostException;
 import com.lecture.spring_sns_sample_project.domain.post.PostRepository;
 import java.util.Collection;
@@ -112,7 +113,9 @@ public class PostLikeService {
   }
 
   private void validatePostExists(Long postId) {
-    if (!postRepository.existsById(postId)) {
+    Post post =
+        postRepository.findWithAuthorById(postId).orElseThrow(() -> PostException.notFound(postId));
+    if (post.isDeleted()) {
       throw PostException.notFound(postId);
     }
   }
