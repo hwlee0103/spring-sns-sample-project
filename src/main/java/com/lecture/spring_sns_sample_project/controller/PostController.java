@@ -7,6 +7,7 @@ import com.lecture.spring_sns_sample_project.controller.dto.PostUpdateRequest;
 import com.lecture.spring_sns_sample_project.domain.post.Post;
 import com.lecture.spring_sns_sample_project.domain.post.PostService;
 import com.lecture.spring_sns_sample_project.domain.user.security.AuthUser;
+import com.lecture.spring_sns_sample_project.domain.user.security.CurrentUser;
 import jakarta.validation.Valid;
 import java.net.URI;
 import lombok.RequiredArgsConstructor;
@@ -15,7 +16,6 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -39,7 +39,7 @@ public class PostController {
   /** 게시글 생성 — 통합 (일반/답글/인용/리포스트). */
   @PostMapping("/api/v1/post")
   public ResponseEntity<PostResponse> create(
-      @Valid @RequestBody PostCreateRequest request, @AuthenticationPrincipal AuthUser authUser) {
+      @Valid @RequestBody PostCreateRequest request, @CurrentUser AuthUser authUser) {
     requireAuth(authUser);
     Post post =
         postService.create(
@@ -100,7 +100,7 @@ public class PostController {
   public ResponseEntity<PostResponse> update(
       @PathVariable Long id,
       @Valid @RequestBody PostUpdateRequest request,
-      @AuthenticationPrincipal AuthUser authUser) {
+      @CurrentUser AuthUser authUser) {
     requireAuth(authUser);
     Post post = postService.update(authUser.getId(), id, request.content());
     return ResponseEntity.ok(PostResponse.from(post));
@@ -108,8 +108,7 @@ public class PostController {
 
   /** 게시글 삭제 — soft delete. */
   @DeleteMapping("/api/v1/post/{id}")
-  public ResponseEntity<Void> delete(
-      @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
+  public ResponseEntity<Void> delete(@PathVariable Long id, @CurrentUser AuthUser authUser) {
     requireAuth(authUser);
     postService.delete(authUser.getId(), id);
     return ResponseEntity.noContent().build();

@@ -6,13 +6,13 @@ import com.lecture.spring_sns_sample_project.controller.dto.PostLikeResponse;
 import com.lecture.spring_sns_sample_project.domain.like.PostLike;
 import com.lecture.spring_sns_sample_project.domain.like.PostLikeService;
 import com.lecture.spring_sns_sample_project.domain.user.security.AuthUser;
+import com.lecture.spring_sns_sample_project.domain.user.security.CurrentUser;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -27,15 +27,14 @@ public class PostLikeController {
 
   @PostMapping("/api/v1/post/{id}/like")
   public ResponseEntity<PostLikeResponse> like(
-      @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
+      @PathVariable Long id, @CurrentUser AuthUser authUser) {
     requireAuth(authUser);
     PostLike postLike = postLikeService.like(authUser.getId(), id);
     return ResponseEntity.status(201).body(PostLikeResponse.from(postLike));
   }
 
   @DeleteMapping("/api/v1/post/{id}/like")
-  public ResponseEntity<Void> unlike(
-      @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
+  public ResponseEntity<Void> unlike(@PathVariable Long id, @CurrentUser AuthUser authUser) {
     requireAuth(authUser);
     postLikeService.unlike(authUser.getId(), id);
     return ResponseEntity.noContent().build();
@@ -43,7 +42,7 @@ public class PostLikeController {
 
   @GetMapping("/api/v1/post/{id}/like/status")
   public ResponseEntity<LikeStatusResponse> likeStatus(
-      @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
+      @PathVariable Long id, @CurrentUser AuthUser authUser) {
     requireAuth(authUser);
     boolean liked = postLikeService.isLiked(authUser.getId(), id);
     return ResponseEntity.ok(new LikeStatusResponse(liked));
