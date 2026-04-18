@@ -394,20 +394,20 @@ public record PostResponse(
 
 #### 대규모 SNS 설계 비교
 
-| 기능 | Twitter/X | Threads | Reddit | **이 프로젝트** |
-|------|-----------|---------|--------|-----------------|
-| 일반 게시글 | Tweet | Post | Post | ✅ ORIGINAL |
-| 답글 | Reply (in_reply_to) | Reply (parent) | Comment (parent_id) | ✅ REPLY (parentId) |
-| 인용 | Quote Tweet | ❌ | ❌ | ✅ QUOTE (quoteId) |
-| 리포스트 | Retweet | Repost | Crosspost | ✅ REPOST (repostId) |
-| 수정 | 30분 (Blue) | 5분 | 무제한 | ✅ 20분 |
-| 삭제 | 즉시 | 즉시 | 즉시 (content 제거) | ✅ Soft delete + content null |
-| 좋아요 수 | ✅ | ✅ | ✅ (upvote) | ✅ likeCount |
-| 답글 수 | ✅ | ✅ | ✅ | ✅ replyCount |
-| 리포스트 수 | ✅ | ❌ | ❌ | ✅ repostCount |
-| 조회 수 | ✅ (2022~) | ❌ | ✅ | ✅ viewCount |
-| 공유 수 | ❌ | ❌ | ❌ | ✅ shareCount |
-| 수정 이력 | ✅ | ❌ | ✅ (edited 표시) | ⬜ 향후 |
+| 기능 | Twitter/X | Threads | Reddit | LinkedIn | **이 프로젝트** |
+|------|-----------|---------|--------|----------|-----------------|
+| 일반 게시글 | Tweet | Post | Post | Post | ✅ ORIGINAL |
+| 답글 | Reply (in_reply_to) | Reply (parent) | Comment (parent_id) | Comment | ✅ REPLY (parentId) |
+| 인용 | Quote Tweet | ❌ | ❌ | ❌ | ✅ QUOTE (quoteId) |
+| 리포스트 | Retweet | Repost | Crosspost | Repost | ✅ REPOST (repostId) |
+| 수정 | 30분 (Blue) | 5분 | 무제한 | 무제한 | ✅ 20분 |
+| 삭제 | 즉시 | 즉시 | 즉시 (content 제거) | 즉시 | ✅ Soft delete + content null |
+| 좋아요 수 | ✅ | ✅ | ✅ (upvote) | ✅ Like + 7종 Reaction | ✅ likeCount |
+| 답글 수 | ✅ | ✅ | ✅ | ✅ | ✅ replyCount |
+| 리포스트 수 | ✅ | ❌ | ❌ | ✅ | ✅ repostCount |
+| 조회 수 | ✅ (2022~) | ❌ | ✅ | ✅ Impressions | ✅ viewCount |
+| 공유 수 | ❌ | ❌ | ❌ | ✅ | ✅ shareCount |
+| 수정 이력 | ✅ | ❌ | ✅ (edited 표시) | ❌ (edited 표시만) | ⬜ 향후 |
 
 #### 향후 확장
 

@@ -1,7 +1,7 @@
 # Post Service Design — 게시글 도메인 설계
 
 > 이 문서는 게시글(Post) 도메인의 엔티티, 비즈니스 규칙, API 계약, 인덱스 전략을 정의한다.
-> 대규모 SNS(Twitter/X, Threads, Reddit, Instagram)를 참고하여 설계.
+> 대규모 SNS(Twitter/X, Threads, Reddit, Instagram, LinkedIn)를 참고하여 설계.
 
 ## 1. 게시글 유형
 
@@ -773,17 +773,20 @@ public record PostResponse(
 
 ## 10. 대규모 SNS 비교
 
-| 기능 | Twitter/X | Threads | Reddit | **이 프로젝트** |
-|------|-----------|---------|--------|-----------------|
-| 일반 게시글 | ✅ Tweet | ✅ Post | ✅ Post | ✅ ORIGINAL |
-| 답글 | ✅ in_reply_to | ✅ parent | ✅ parent_id | ✅ parentId |
-| 인용 | ✅ Quote Tweet | ❌ | ❌ | ✅ quoteId |
-| 리포스트 | ✅ Retweet | ✅ Repost | ✅ Crosspost | ✅ repostId |
-| 수정 | 30분 (Blue) | 5분 | 무제한 | **20분** |
-| 삭제 | 즉시 (hard) | 즉시 | soft ([deleted]) | **soft delete** |
-| 좋아요 | ✅ | ✅ | ✅ upvote | ✅ likeCount |
-| 조회 수 | ✅ (2022~) | ❌ | ✅ | ✅ viewCount |
-| 수정 이력 | ✅ | ❌ | ✅ (edited) | ⬜ 향후 |
+| 기능 | Twitter/X | Threads | Reddit | LinkedIn | **이 프로젝트** |
+|------|-----------|---------|--------|----------|-----------------|
+| 일반 게시글 | ✅ Tweet | ✅ Post | ✅ Post | ✅ Post | ✅ ORIGINAL |
+| 답글 | ✅ in_reply_to | ✅ parent | ✅ parent_id | ✅ Comment | ✅ parentId |
+| 인용 | ✅ Quote Tweet | ❌ | ❌ | ❌ | ✅ quoteId |
+| 리포스트 | ✅ Retweet | ✅ Repost | ✅ Crosspost | ✅ Repost | ✅ repostId |
+| 수정 | 30분 (Blue) | 5분 | 무제한 | 무제한 | **20분** |
+| 삭제 | 즉시 (hard) | 즉시 | soft ([deleted]) | 즉시 | **soft delete** |
+| 좋아요 | ✅ | ✅ | ✅ upvote | ✅ Like + 7종 Reaction | ✅ likeCount |
+| 조회 수 | ✅ (2022~) | ❌ | ✅ | ✅ Impressions | ✅ viewCount |
+| 수정 이력 | ✅ | ❌ | ✅ (edited) | ❌ (edited 표시만) | ⬜ 향후 |
+| 공유 수 | ❌ | ❌ | ❌ | ✅ Share count | ✅ shareCount |
+
+> **LinkedIn 참고 포인트**: LinkedIn 은 수정 시간 제한이 없지만 "(수정됨)" 표시를 하고, Reaction 을 7종으로 분류(Like/Celebrate/Support/Funny/Love/Insightful/Curious)한다. 이 프로젝트는 단일 Like 로 시작하되 향후 Reaction 확장 가능하도록 설계한다. LinkedIn 의 공유(Share) 카운트도 참고하여 `shareCount` 를 포함했다.
 
 ## 11. 향후 확장
 
