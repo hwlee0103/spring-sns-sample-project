@@ -1,5 +1,6 @@
 package com.lecture.spring_sns_sample_project.domain.follow;
 
+import com.lecture.spring_sns_sample_project.domain.common.BaseEntity;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import jakarta.persistence.Column;
 import jakarta.persistence.ConstraintMode;
@@ -17,6 +18,14 @@ import jakarta.persistence.UniqueConstraint;
 import java.time.Instant;
 import lombok.Getter;
 
+/**
+ * 팔로우 관계 Entity — Soft Delete 패턴.
+ *
+ * <p>{@link BaseEntity} 로부터 {@code createdAt}, {@code updatedAt}, {@code deletedAt} 을 상속받는다. {@code
+ * deleted} boolean 은 Follow 전용 쿼리 필터링에 사용(인덱스 지원).
+ *
+ * <p>{@code restore()} 시 {@code createdAt} 을 현재 시각으로 재설정하여 "재팔로우 시점"을 기록한다.
+ */
 @Entity
 @Table(
     name = "follows",
@@ -27,7 +36,7 @@ import lombok.Getter;
       @Index(name = "idx_follows_follower_created", columnList = "follower_id, created_at DESC")
     })
 @Getter
-public class Follow {
+public class Follow extends BaseEntity {
 
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -48,12 +57,7 @@ public class Follow {
   private User following;
 
   @Column(nullable = false)
-  private Instant createdAt;
-
-  @Column(nullable = false)
   private boolean deleted = false;
-
-  @Column private Instant deletedAt;
 
   protected Follow() {}
 
@@ -69,7 +73,6 @@ public class Follow {
     }
     this.follower = follower;
     this.following = following;
-    this.createdAt = Instant.now();
   }
 
   /** 언팔로우 — 논리 삭제. */
@@ -78,7 +81,7 @@ public class Follow {
     this.deletedAt = Instant.now();
   }
 
-  /** 재팔로우 — soft deleted 행 복원. */
+  /** 재팔로우 — soft deleted 행 복원. {@code createdAt} 을 현재 시각으로 재설정. */
   public void restore() {
     this.deleted = false;
     this.deletedAt = null;
