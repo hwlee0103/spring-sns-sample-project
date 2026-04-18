@@ -58,53 +58,147 @@
 | 조회수 정확도 | 실시간 정확 | **최대 1분 지연** (허용) |
 | 장애 시 손실 | 없음 | 최대 1분치 조회수 (허용) |
 
-## 3. Redis 키 설계
+## 3. Redis 키 설계 — Dirty Set 패턴
 
-### 3.1 키 패턴
+### 3.1 핵심 아이디어
 
-```
-post:views:{postId}     — 게시글별 조회수 delta (INCR 대상)
-```
-
-- **타입**: String (Redis counter)
-- **값**: 마지막 배치 동기화 이후 누적된 조회수 delta
-- **TTL**: 없음 (배치에서 GETDEL 로 삭제). 단, 안전장치로 24시간 TTL 권장
-
-### 3.2 조회수 읽기 전략
+단순 KEYS/SCAN 으로 조회수가 변한 게시글을 찾는 것은 비효율적이다. **Dirty Set** 에 변경된 게시글 ID 만 추적하면 동기화 대상을 O(1) 로 식별할 수 있다.
 
 ```
-[프론트에서 조회수 표시]
+Redis 에 2종류의 키 사용:
 
-방법 1: DB 값 사용 (권장 — 단순)
-  → Post.viewCount (DB 저장값, 최대 1분 지연)
-  → 피드 조회 시 JOIN 없이 Post 행에서 바로 읽음
+1. post:views:{postId}     — 게시글별 조회수 delta (INCR 대상)
+   타입: String (counter)
+   값: 마지막 동기화 이후 누적 조회 수
 
-방법 2: DB + Redis 합산 (정확)
-  → Post.viewCount + Redis GET post:views:{id}
-  → 추가 Redis 호출 필요. 피드 N개면 N번 GET → MGET 으로 최적화
-
-방법 3: Redis 전용 (실시간)
-  → Redis 에 누적 총 조회수 유지 (INCRBY 패턴)
-  → DB 는 백업 용도만
+2. post:views:dirty         — 조회수가 변한 게시글 ID 집합 (SADD 대상)
+   타입: Set
+   값: {42, 108, 235, ...} — 동기화 필요한 postId 들
 ```
 
-> **권장: 방법 1** — 1분 지연은 UX 에 영향 없고, 추가 Redis 호출 없이 기존 Post 쿼리로 충분.
+### 3.2 키 설계 상세
 
-## 4. 배치 스케줄러 설계
+| 키 | 타입 | 명령 | 동시성 | 설명 |
+|----|------|------|--------|------|
+| `post:views:{postId}` | String | `INCR` | **원자적** — 동시 INCR 이 순차 실행됨. 100 스레드가 동시 INCR 해도 정확히 100 증가 | 조회수 delta |
+| `post:views:dirty` | Set | `SADD` | **멱등** — 동일 postId 를 여러 번 SADD 해도 Set 에 1개만 존재. 중복 안전 | 변경 목록 |
+
+> **왜 INCR 이 동시성에 안전한가**: Redis 는 싱글 스레드로 명령을 순차 실행한다. `INCR` 은 단일 명령이므로 atomic 이 보장된다. 100개 요청이 동시에 도착해도 순차 실행되어 정확히 100 증가.
+>
+> **왜 SADD 가 중복에 안전한가**: Redis Set 은 중복을 허용하지 않는다. `SADD post:views:dirty 42` 를 100번 호출해도 Set 에는 `42` 가 1개만 존재한다. 동기화 시 각 postId 를 정확히 1번만 처리하면 된다.
+
+### 3.3 조회 발생 시 — 2단계 기록
+
+```
+[사용자 조회] GET /api/v1/post/42
+                ↓
+[ViewCountRecorder.increment(42)]
+  Step 1: INCR post:views:42           → 조회수 delta + 1 (원자적)
+  Step 2: SADD post:views:dirty 42     → dirty set 에 postId 등록 (멱등)
+  → DB 쓰기 없음. Redis 명령 2개 (파이프라인으로 1 RTT)
+```
+
+### 3.4 조회수 읽기 전략
+
+| 방법 | 구현 | 정확도 | 비용 | 권장 |
+|------|------|--------|------|------|
+| DB 값만 사용 | `Post.viewCount` | 최대 1분 지연 | 없음 | **✅ 권장** |
+| DB + Redis 합산 | `Post.viewCount + GET post:views:{id}` | 실시간 | Redis GET 추가 | 정확도 필요 시 |
+| Redis 전용 | 누적 총 조회수를 Redis 에 유지 | 실시간 | Redis 의존 | 비권장 |
+
+> **권장: DB 값만 사용** — 1분 지연은 UX 에 영향 없고, 추가 Redis 호출 없이 기존 Post 쿼리로 충분.
+
+## 4. 배치 스케줄러 설계 — Dirty Set 동기화
 
 ### 4.1 배치 주기 권장
 
-| 주기 | 장점 | 단점 | 적합 환경 |
-|------|------|------|----------|
-| 10초 | 거의 실시간 | DB UPDATE 빈도 높음 (6회/분) | 실시간 랭킹 필요 시 |
-| 30초 | 좋은 균형 | — | 중간 규모 |
-| **1분 (권장)** | DB 부하 최소, 대부분의 SNS 허용 범위 | 최대 1분 지연 | **일반 SNS** |
-| 5분 | DB 부하 거의 없음 | 5분 지연 체감 가능 | 트래픽 매우 낮은 서비스 |
-| 10분+ | — | 지연 체감됨 | 조회수 중요하지 않은 서비스 |
+| 주기 | DB UPDATE 빈도 | 적합 환경 |
+|------|---------------|----------|
+| 10초 | 높음 (6회/분) | 실시간 랭킹 |
+| 30초 | 중간 | 중간 규모 |
+| **1분 (권장)** | 최소 | **일반 SNS** |
+| 5분 | 거의 없음 | 트래픽 낮은 서비스 |
 
-> **권장: 1분** — Twitter/YouTube 도 조회수를 분 단위로 갱신. 사용자가 "조회수 1,234" 를 보고 새로고침해도 1분 내 같은 값이 나오는 것은 자연스러움.
+> **1분 권장**: Twitter/YouTube 도 분 단위 갱신. "조회수 42,381" 을 보고 새로고침해도 1분 내 같은 값인 것은 자연스러움.
 
-### 4.2 배치 구현 — Spring @Scheduled
+### 4.2 동기화 흐름 — GETDEL + SREM 패턴
+
+```
+[배치 스케줄러 — 1분 주기]
+
+Step 1: SMEMBERS post:views:dirty
+  → {42, 108, 235} — 조회수가 바뀐 게시글 ID 목록
+
+Step 2: 각 postId 에 대해:
+  2-a: GETDEL post:views:42       → delta = 157 (가져오면서 삭제 — 원자적)
+  2-b: UPDATE posts SET view_count = view_count + 157 WHERE id = 42
+
+Step 3: SREM post:views:dirty 42  → dirty set 에서 제거
+  → 처리 완료된 postId 만 제거
+```
+
+### 4.3 동시성 경합 — GETDEL 과 SREM 사이의 갭
+
+```
+Timeline:
+  t=0  [스케줄러] SMEMBERS dirty → {42}
+  t=1  [스케줄러] GETDEL post:views:42 → 157 (키 삭제됨)
+  t=2  [사용자 C] INCR post:views:42 → 1 (새로운 조회 발생!)
+  t=2  [사용자 C] SADD post:views:dirty 42 → dirty set 에 42 다시 추가
+  t=3  [스케줄러] UPDATE posts SET view_count += 157
+  t=4  [스케줄러] SREM post:views:dirty 42 → 42 제거됨!
+
+  ⚠️ t=2 의 조회수 "1" 은 post:views:42 에 남아있지만,
+     dirty set 에서 42 가 제거되어 다음 동기화까지 인식 안 됨
+  → 다음 조회가 올 때 다시 SADD 되므로 결국 동기화됨
+  → 최악의 경우: 마지막 1건이 1분 더 지연 (2분 지연)
+```
+
+### 4.4 오차 최소화 — 권장 방안 3가지
+
+| 방안 | 설명 | 오차 | 복잡성 |
+|------|------|------|--------|
+| **A. GETDEL 후 SREM (현재)** | 위 흐름 그대로. 마지막 1건이 다음 주기까지 지연 가능 | 최대 +1분 | 낮음 |
+| **B. Lua 스크립트 원자 처리** | GETDEL + SREM 을 Lua 스크립트로 원자적 실행 → 갭 제거 | **0** | 중간 |
+| **C. Double-buffer (스왑 패턴)** | dirty set 을 2개 운용, 스왑하여 새 조회와 동기화를 분리 | **0** | 높음 |
+
+#### 방안 B — Lua 스크립트 (권장)
+
+```lua
+-- view_sync.lua: GETDEL + SREM 원자적 실행
+-- KEYS[1] = post:views:{postId}
+-- KEYS[2] = post:views:dirty
+-- ARGV[1] = postId
+local delta = redis.call('GETDEL', KEYS[1])
+if delta then
+    redis.call('SREM', KEYS[2], ARGV[1])
+end
+return delta
+```
+
+```java
+// Lua 스크립트로 GETDEL + SREM 원자적 실행 — 갭 없음
+String delta = redisTemplate.execute(viewSyncScript,
+    List.of(VIEW_KEY_PREFIX + postId, DIRTY_SET_KEY),
+    String.valueOf(postId));
+```
+
+> **Lua 스크립트는 Redis 에서 원자적으로 실행된다.** GETDEL 과 SREM 사이에 다른 명령이 끼어들 수 없으므로, 위의 t=2 경합이 발생하지 않는다.
+
+#### 방안 C — Double-buffer (참고)
+
+```
+[주기 시작]
+  1. RENAME post:views:dirty → post:views:dirty:processing
+     → 이 순간 새 조회는 post:views:dirty (빈 set) 에 쌓임
+  2. SMEMBERS post:views:dirty:processing → 처리 대상
+  3. 각 postId: GETDEL + DB UPDATE
+  4. DEL post:views:dirty:processing
+```
+
+> RENAME 은 O(1) 원자적 — 새 조회가 processing set 에 끼어들 가능성 제거. 단, 키 관리가 복잡.
+
+### 4.5 최종 구현 — 방안 B (Lua 스크립트)
 
 ```java
 @Component
@@ -116,60 +210,49 @@ public class ViewCountSyncScheduler {
     private final PostRepository postRepository;
 
     private static final String VIEW_KEY_PREFIX = "post:views:";
+    private static final String DIRTY_SET_KEY = "post:views:dirty";
 
-    /**
-     * 1분마다 Redis 의 조회수 delta 를 DB 에 동기화.
-     * Redis SCAN + GETDEL 패턴으로 원자적으로 값을 가져오고 삭제.
-     */
+    // Lua: GETDEL + SREM 원자적 실행
+    private static final RedisScript<String> SYNC_SCRIPT = RedisScript.of(
+        "local delta = redis.call('GETDEL', KEYS[1])\n" +
+        "if delta then redis.call('SREM', KEYS[2], ARGV[1]) end\n" +
+        "return delta",
+        String.class);
+
     @Scheduled(fixedRate = 60_000)  // 1분
     @Transactional
     public void syncViewCounts() {
-        Set<String> keys = redisTemplate.keys(VIEW_KEY_PREFIX + "*");
-        if (keys == null || keys.isEmpty()) return;
+        // Step 1: dirty set 에서 변경된 게시글 ID 목록 조회
+        Set<String> dirtyPostIds = redisTemplate.opsForSet().members(DIRTY_SET_KEY);
+        if (dirtyPostIds == null || dirtyPostIds.isEmpty()) return;
 
         int synced = 0;
-        for (String key : keys) {
-            // GETDEL: 값을 가져오면서 동시에 삭제 (원자적)
-            String deltaStr = redisTemplate.opsForValue().getAndDelete(key);
+        for (String postIdStr : dirtyPostIds) {
+            Long postId = Long.parseLong(postIdStr);
+
+            // Step 2: Lua 로 GETDEL + SREM 원자적 실행
+            String deltaStr = redisTemplate.execute(
+                SYNC_SCRIPT,
+                List.of(VIEW_KEY_PREFIX + postId, DIRTY_SET_KEY),
+                postIdStr);
             if (deltaStr == null) continue;
 
             long delta = Long.parseLong(deltaStr);
             if (delta <= 0) continue;
 
-            Long postId = Long.parseLong(key.substring(VIEW_KEY_PREFIX.length()));
+            // Step 3: DB 원자적 UPDATE
             postRepository.incrementViewCountBy(postId, delta);
             synced++;
         }
 
         if (synced > 0) {
-            log.info("[ViewCountSync] {}개 게시글 조회수 동기화 (총 delta 합산)", synced);
+            log.info("[ViewCountSync] {}개 게시글 조회수 동기화 완료", synced);
         }
     }
 }
 ```
 
-### 4.3 PostRepository 추가 메서드
-
-```java
-/** 조회수 배치 증가 — delta 만큼 한 번에 증가. */
-@Modifying
-@Query("UPDATE Post p SET p.viewCount = p.viewCount + :delta WHERE p.id = :postId")
-int incrementViewCountBy(@Param("postId") Long postId, @Param("delta") long delta);
-```
-
-### 4.4 PostService 조회수 기록
-
-```java
-public Post getById(Long id) {
-    Post post = postRepository.findWithAuthorById(id)
-        .orElseThrow(() -> PostException.notFound(id));
-
-    // 조회수: DB 대신 Redis 에만 기록 (배치로 동기화)
-    viewCountRecorder.increment(id);
-
-    return post;
-}
-```
+### 4.6 ViewCountRecorder — 조회 기록
 
 ```java
 @Component
@@ -178,16 +261,52 @@ public class ViewCountRecorder {
 
     private final StringRedisTemplate redisTemplate;
     private static final String VIEW_KEY_PREFIX = "post:views:";
+    private static final String DIRTY_SET_KEY = "post:views:dirty";
 
-    /** Redis INCR — O(1), ~0.1ms. DB 쓰기 없음. */
+    /**
+     * 조회수 기록 — Redis 에만 기록, DB 쓰기 없음.
+     *
+     * <p>INCR + SADD 를 파이프라인으로 1 RTT 에 실행.
+     * 두 명령 모두 원자적(INCR) / 멱등(SADD) 이므로 동시성 안전.
+     */
     public void increment(Long postId) {
         try {
-            redisTemplate.opsForValue().increment(VIEW_KEY_PREFIX + postId);
+            String postIdStr = String.valueOf(postId);
+            redisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+                byte[] viewKey = (VIEW_KEY_PREFIX + postId).getBytes();
+                byte[] dirtyKey = DIRTY_SET_KEY.getBytes();
+                connection.stringCommands().incr(viewKey);            // 조회수 +1
+                connection.setCommands().sAdd(dirtyKey, postIdStr.getBytes()); // dirty set 등록
+                return null;
+            });
         } catch (Exception e) {
             // Redis 장애 시 조회수만 누락 — 서비스 영향 없음
-            // 로그만 남기고 진행
+            log.warn("[ViewCount] Redis 기록 실패: postId={}", postId, e);
         }
     }
+}
+```
+
+### 4.7 PostRepository 추가 메서드
+
+```java
+/** 조회수 배치 증가 — delta 만큼 한 번에 증가. */
+@Modifying
+@Query("UPDATE Post p SET p.viewCount = p.viewCount + :delta WHERE p.id = :postId")
+int incrementViewCountBy(@Param("postId") Long postId, @Param("delta") long delta);
+```
+
+### 4.8 PostService 연결
+
+```java
+public Post getById(Long id) {
+    Post post = postRepository.findWithAuthorById(id)
+        .orElseThrow(() -> PostException.notFound(id));
+
+    // 조회수: DB 대신 Redis 에만 기록 (dirty set 패턴)
+    viewCountRecorder.increment(id);
+
+    return post;
 }
 ```
 
