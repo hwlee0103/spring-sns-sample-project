@@ -110,6 +110,7 @@ com.lecture.spring_sns_sample_project
 | author | User | `@ManyToOne(LAZY)`, FK 제약 없음 |
 | content | String | not null, 1~500자 |
 | createdAt | Instant | not null, 생성 시 자동 설정 |
+| metadata | JSONB (향후) | nullable — 미디어/위치/태그 등 유연한 확장 데이터 |
 
 **불변식**
 - `author`: not null
@@ -118,6 +119,94 @@ com.lecture.spring_sns_sample_project
 **도메인 메서드**
 - `updateContent(content)` — 길이/blank 검증
 - `isAuthor(userId)` — 권한 체크 헬퍼
+
+### 4.2.1 미디어 서비스 설계 (향후)
+
+Post 에 이미지/동영상 첨부를 지원하기 위한 설계. **JSONB `metadata` 컬럼**으로 유연한 메타데이터 관리.
+
+**왜 JSONB 인가**
+
+| 방식 | 장점 | 단점 |
+|------|------|------|
+| 별도 `post_media` 테이블 | 정규화, 미디어별 인덱싱 | JOIN 비용, 스키마 변경마다 마이그레이션 |
+| Post 컬럼 추가 (`image_url`, `video_url`) | 단순 | 미디어 수 제한, 컬럼 스프롤 |
+| **JSONB `metadata` 컬럼** | 스키마 변경 없이 확장, PostgreSQL 네이티브 인덱싱, 단일 행 조회로 미디어 포함 | H2 미지원 (PostgreSQL 전용), 타입 안전성 애플리케이션 책임 |
+
+> **선택**: JSONB — SNS 게시글 메타데이터는 구조가 자주 변하고 (이미지 → 동영상 → 투표 → 위치 등), 각 게시글의 메타데이터 구조가 다를 수 있어 유연성이 핵심.
+
+**JSONB 스키마 설계**
+
+```json
+{
+  "media": [
+    {
+      "type": "IMAGE",
+      "url": "https://cdn.example.com/posts/123/photo1.jpg",
+      "thumbnailUrl": "https://cdn.example.com/posts/123/photo1_thumb.jpg",
+      "width": 1080,
+      "height": 1350,
+      "altText": "사진 설명"
+    },
+    {
+      "type": "VIDEO",
+      "url": "https://cdn.example.com/posts/123/video1.mp4",
+      "thumbnailUrl": "https://cdn.example.com/posts/123/video1_thumb.jpg",
+      "durationSeconds": 30
+    }
+  ],
+  "location": {
+    "name": "서울 강남구",
+    "latitude": 37.4979,
+    "longitude": 127.0276
+  },
+  "tags": ["여행", "맛집"],
+  "mentions": [2, 5, 12]
+}
+```
+
+**Entity 확장 (향후)**
+
+```java
+@Entity
+@Table(name = "posts")
+public class Post {
+    // ... 기존 필드 ...
+
+    /** 미디어/위치/태그 등 유연한 확장 데이터. PostgreSQL JSONB. */
+    @Column(columnDefinition = "jsonb")
+    private String metadata;  // 또는 Map<String, Object> + Hibernate JSON 타입
+}
+```
+
+**마이그레이션 (향후)**
+
+```sql
+-- V3__post_metadata_jsonb.sql
+ALTER TABLE posts ADD COLUMN metadata JSONB;
+
+-- 미디어 포함 게시글 조회 인덱스 (GIN)
+CREATE INDEX idx_posts_metadata_gin ON posts USING GIN (metadata);
+
+-- 특정 태그로 검색: WHERE metadata @> '{"tags": ["여행"]}'
+-- 미디어 포함 여부: WHERE metadata ? 'media'
+```
+
+**미디어 업로드 흐름 (Presigned URL 패턴)**
+
+```
+1. Client → POST /api/media/presigned-url
+   { "fileName": "photo.jpg", "contentType": "image/jpeg" }
+
+2. Server → 200
+   { "uploadUrl": "https://s3.../presigned...", "mediaUrl": "https://cdn.../posts/photo.jpg" }
+
+3. Client → PUT uploadUrl (직접 S3 업로드, 서버 미경유)
+
+4. Client → POST /api/post
+   { "content": "오늘의 사진", "metadata": { "media": [{ "type": "IMAGE", "url": "..." }] } }
+```
+
+> **구현 범위**: 현재는 설계만. Post Entity 의 `metadata` 컬럼 추가와 Presigned URL 엔드포인트는 미디어 서비스 구현 시 진행.
 
 ### 4.3 Follow
 
@@ -1491,7 +1580,38 @@ Entity 에서 `@Table(indexes = ...)` 로 인덱스를 선언하면 Hibernate DD
     })
 ```
 
-### 10.7 인덱스 비용 — 트레이드오프
+### 10.7 부분 인덱스 (PostgreSQL 전용)
+
+Soft delete 패턴에서 대부분의 쿼리는 `deleted = false` 행만 대상으로 한다. **부분 인덱스(partial index)**를 사용하면:
+
+| 효과 | 설명 |
+|------|------|
+| 인덱스 크기 축소 | `deleted = true` 행은 인덱스에서 제외 → soft delete 누적에도 인덱스 비대화 방지 |
+| INSERT 비용 감소 | 전체 인덱스 대비 유지 비용 낮음 |
+| 쿼리 성능 향상 | 활성 행만 대상으로 인덱스 스캔 → 불필요한 행 skip |
+
+```sql
+-- 팔로워 목록: WHERE following_id = ? AND deleted = false ORDER BY created_at DESC
+CREATE INDEX idx_follows_following_active
+    ON follows (following_id, created_at DESC)
+    WHERE deleted = false;
+
+-- 팔로잉 목록: WHERE follower_id = ? AND deleted = false ORDER BY created_at DESC
+CREATE INDEX idx_follows_follower_active
+    ON follows (follower_id, created_at DESC)
+    WHERE deleted = false;
+
+-- 팔로우 여부 확인: WHERE follower_id = ? AND following_id = ? AND deleted = false
+CREATE INDEX idx_follows_pair_active
+    ON follows (follower_id, following_id)
+    WHERE deleted = false;
+```
+
+> **V1 전체 인덱스와 공존**: PostgreSQL 옵티마이저가 `WHERE deleted = false` 조건이 있을 때 자동으로 부분 인덱스를 선택한다. 전체 인덱스는 soft-deleted 행 포함 조회(관리자 통계 등)에서 활용.
+>
+> **H2 미지원**: 부분 인덱스는 PostgreSQL 전용 기능. dev 프로필(H2)에서는 V1 전체 인덱스만 사용. Flyway V2 마이그레이션은 prod 프로필에서만 실행.
+
+### 10.8 인덱스 비용 — 트레이드오프
 
 | 항목 | 영향 |
 |------|------|
@@ -1685,11 +1805,12 @@ src/main/resources/http/follow.sh   # Follow API (15 steps)
 - [ ] Review #10 — `register` vs `update` 인코딩 패턴 비일관 (부분 해결)
 - [ ] Review #13 — `UserService.delete` 두 번 DB 접근 + 트랜잭션 미적용
 - [ ] Review #14 — NotFound 응답을 404 로 분기
-- [ ] Post 이미지 첨부 (presigned URL 패턴)
+- [x] PostgreSQL + Flyway 마이그레이션 적용 (2026-04-18, V1 초기 스키마 + V2 부분 인덱스)
+- [ ] Post 미디어 서비스 구현 (§4.2.1 JSONB + Presigned URL — 설계 완료)
 - [ ] Like / Comment 도메인 추가
 - [x] Follow 도메인 설계 완료 (2026-04-15)
 - [x] FollowService Java 통합 테스트 작성 (2026-04-16, 30 scenarios)
 - [x] UserService Java 통합 테스트 작성 (2026-04-17, 36 scenarios)
 - [x] AuthFlow MockMvc 통합 테스트 작성 (2026-04-17, 12 scenarios)
 - [ ] RateLimitFilter / AuthEventListener 단위 테스트 분리 (별도 과제)
-- [ ] PostgreSQL 마이그레이션 (Flyway)
+- [x] PostgreSQL 마이그레이션 (Flyway) — 2026-04-18
