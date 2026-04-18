@@ -6,5 +6,5 @@ import jakarta.validation.constraints.Size;
 
 public record PostUpdateRequest(
     @NotBlank(message = "content는 필수값입니다.")
-        @Size(max = Post.MAX_CONTENT_LENGTH, message = "content는 500자를 초과할 수 없습니다.")
+        @Size(max = Post.MAX_CONTENT_LENGTH, message = "content는 1000자를 초과할 수 없습니다.")
         String content) {}
