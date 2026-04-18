@@ -66,7 +66,7 @@ public enum PostType {
 |------|------|------|------|
 | id | Long | PK, IDENTITY | — |
 | author | User | `@ManyToOne(LAZY)`, FK 제약 없음 | 작성자 |
-| content | String | nullable, max 500자 | 게시글 본문. 리포스트/삭제 시 null |
+| content | String | nullable, max 1000자 | 게시글 본문. 리포스트/삭제 시 null |
 | parentId | Long | nullable | 답글 대상 게시글 ID |
 | quoteId | Long | nullable | 인용 대상 게시글 ID |
 | repostId | Long | nullable | 리포스트 원본 게시글 ID |
@@ -75,6 +75,7 @@ public enum PostType {
 | likeCount | long | not null, default 0 | 좋아요 수 (비정규화) |
 | viewCount | long | not null, default 0 | 조회 수 (비정규화) |
 | shareCount | long | not null, default 0 | 외부 공유 수 (비정규화) |
+| mediaId | Long | nullable (향후) | 첨부 미디어 ID. Media 도메인 추가 시 연결 |
 | createdAt | Instant | not null (BaseEntity) | 생성 시각 |
 | updatedAt | Instant | not null (BaseEntity) | 수정 시각 |
 | deletedAt | Instant | nullable (BaseEntity) | 소프트 삭제 시각 |
@@ -101,7 +102,7 @@ public enum PostType {
 @Getter
 public class Post extends BaseEntity {
 
-    public static final int MAX_CONTENT_LENGTH = 500;
+    public static final int MAX_CONTENT_LENGTH = 1000;  // 추후 용량/효율성에 따라 증감 가능
     public static final int EDIT_WINDOW_MINUTES = 20;
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -135,6 +136,10 @@ public class Post extends BaseEntity {
     private long viewCount;
     @Column(nullable = false)
     private long shareCount;
+
+    /** 첨부 미디어 ID — Media 도메인 추가 시 연결 (향후). FK 제약 없음. */
+    @Column
+    private Long mediaId;
 
     protected Post() {}
 
@@ -253,6 +258,9 @@ public interface PostRepository extends JpaRepository<Post, Long> {
     /** 중복 인용 확인 — 같은 사용자가 같은 게시글을 2회 이상 인용했는지 */
     boolean existsByQuoteIdAndAuthorId(Long quoteId, Long authorId);
 
+    /** 중복 리포스트 확인 — 같은 사용자가 같은 게시글을 2회 이상 리포스트했는지 */
+    boolean existsByRepostIdAndAuthorId(Long repostId, Long authorId);
+
     /** 사용자 삭제 시 해당 사용자의 모든 게시글 물리 삭제 */
     @Modifying
     @Query("DELETE FROM Post p WHERE p.author = :author")
@@ -312,8 +320,8 @@ public class PostService {
 
         Post post;
         if (repostId != null) {
-            // 리포스트: content 금지, parentId/quoteId 금지
-            validateRepostTarget(repostId);
+            // 리포스트: content 없음 (원본 참조만), parentId/quoteId 금지
+            validateRepostTarget(repostId, authorId);
             post = Post.repost(author, repostId);
             postRepository.save(post);
             postRepository.incrementRepostCount(repostId);
@@ -405,7 +413,14 @@ public class PostService {
         }
     }
 
-    private void validateRepostTarget(Long repostId) {
+    /**
+     * 리포스트 대상 검증.
+     * 1. 원본 게시글 존재 확인
+     * 2. 삭제된 게시글 리포스트 금지
+     * 3. 리포스트의 리포스트 금지 (원본만 리포스트 가능)
+     * 4. 같은 사용자의 중복 리포스트 금지
+     */
+    private void validateRepostTarget(Long repostId, Long authorId) {
         Post original = postRepository.findWithAuthorById(repostId)
             .orElseThrow(() -> PostException.notFound(repostId));
         if (original.isDeleted()) {
@@ -414,6 +429,10 @@ public class PostService {
         // 리포스트의 리포스트 금지 (원본만 리포스트 가능)
         if (original.getRepostId() != null) {
             throw PostException.repostOfRepost();
+        }
+        // 같은 사용자가 같은 게시글을 2회 이상 리포스트 금지
+        if (postRepository.existsByRepostIdAndAuthorId(repostId, authorId)) {
+            throw PostException.duplicateRepost();
         }
     }
 
@@ -486,6 +505,46 @@ public class PostService {
 | 인용 삭제 | `isAuthor` → `softDelete()` → `quoteId != null` → 원본 `repostCount - 1` | repostCount - 1 |
 
 > **quoteId 변경 불가**: 인용 대상을 다른 게시글로 변경하는 것은 허용하지 않는다. 수정은 content 만 대상.
+
+### 4.5 리포스트 생성 흐름
+
+리포스트(Repost)는 **원본 게시글을 참조하는 게시글**이다. 인용과 달리 자체 콘텐츠를 넣지 않으며, content 는 null 이다. 프론트에서는 "alice님이 리포스트" 배너와 함께 원본 게시글을 그대로 표시한다.
+
+```
+[사용자] POST /api/v1/post { "repostId": 42 }
+           ↓
+[PostService.create]
+  1. User 존재 확인 (authorId → User)
+  2. repostId != null → validateRepostTarget(42, authorId)
+     → postRepository.findWithAuthorById(42) → 원본 존재 확인
+     → original.isDeleted() → 삭제된 게시글 리포스트 금지
+     → original.getRepostId() != null → 리포스트의 리포스트 금지
+     → existsByRepostIdAndAuthorId(42, authorId) → 중복 리포스트 금지
+  3. Post.repost(author, 42) → Post 생성
+     → repostId = 42, content = null, type = REPOST
+  4. postRepository.save(post) → INSERT
+  5. postRepository.incrementRepostCount(42) → 원본 repostCount + 1
+  6. return post → 201 Created
+```
+
+**리포스트 규칙**:
+
+| 규칙 | 설명 | 참고 |
+|------|------|------|
+| content = null | 자체 콘텐츠 없이 원본만 참조. 의견을 추가하려면 인용(Quote) 사용 | Twitter Retweet |
+| 중복 리포스트 금지 | 같은 사용자가 같은 게시글을 2회 이상 리포스트 불가 | Twitter: 이미 리트윗됨 |
+| 삭제된 게시글 리포스트 금지 | 인용과 달리 원본이 없으면 표시할 콘텐츠가 없음 | — |
+| 리포스트의 리포스트 금지 | 원본만 리포스트 가능. 체인 방지 | Twitter: Retweet of Retweet 불가 |
+| 수정 불가 | content 가 없으므로 수정 대상 없음. `isEditable()` 이 false 반환 | — |
+| 리포스트 취소 = 삭제 | 리포스트를 취소하면 soft delete + 원본 `repostCount - 1` | Twitter: Undo Retweet |
+
+### 4.6 리포스트 삭제 (취소)
+
+| 작업 | 검증 | 카운트 변동 |
+|------|------|------------|
+| 리포스트 삭제 | `isAuthor` → `softDelete()` → `repostId != null` → 원본 `repostCount - 1` | repostCount - 1 |
+
+> **리포스트 vs 인용 카운트 정리**: 원본 게시글의 `repostCount` 는 리포스트 + 인용의 합산. 삭제 시 어느 쪽이든 감소.
 
 ## 5. 수정 정책 상세
 
