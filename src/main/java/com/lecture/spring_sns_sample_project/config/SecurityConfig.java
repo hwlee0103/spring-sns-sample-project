@@ -106,7 +106,8 @@ public class SecurityConfig {
                         "/api/v1/post",
                         "/api/v1/post/*",
                         "/api/v1/post/*/replies",
-                        "/api/v1/post/*/quotes")
+                        "/api/v1/post/*/quotes",
+                        "/api/v1/post/*/likes")
                     .permitAll()
                     .requestMatchers(
                         HttpMethod.GET,

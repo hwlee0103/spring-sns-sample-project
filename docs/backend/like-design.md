@@ -494,7 +494,93 @@ Set<Long> likedIds = postLikeService.getLikedPostIds(userId, postIds);  // 1 쿼
 
 > **현재 전략**: `Post.likeCount` 단일 카운트 유지. 리액션 도입 시 JSONB 방식 또는 별도 테이블 검토.
 
-## 14. Flyway 마이그레이션 (V5)
+## 14. 대량 쓰기 대응 — post_likes 테이블 성능 전략
+
+### 14.1 문제 인식
+
+좋아요는 SNS 에서 **가장 빈번한 쓰기 작업**이다. 인기 게시글은 초당 수천 건의 좋아요가 발생할 수 있으며, 이는 두 가지 병목을 유발한다:
+
+```
+1. post_likes 테이블: 대량 INSERT (행 생성) + UNIQUE 인덱스 갱신
+2. posts 테이블: 대량 UPDATE (likeCount = likeCount + 1) — hot row 경합
+```
+
+### 14.2 단계별 대응 로드맵
+
+| 단계 | 규모 | 전략 | 구현 난이도 |
+|------|------|------|-----------|
+| **Stage 1 (현재)** | < 만 DAU | DB 직접 쓰기 + 원자적 UPDATE | ✅ 구현 완료 |
+| **Stage 2** | 만~10만 DAU | Write-behind 배치 + Redis 버퍼 | 중 |
+| **Stage 3** | 10만+ DAU | 이벤트 기반 비동기 처리 (Kafka) | 고 |
+
+### 14.3 Stage 1 — 현재 구현 (DB 직접 쓰기)
+
+```java
+// 좋아요 생성 → likeCount 원자적 증가 (단일 트랜잭션)
+@Transactional
+public PostLike like(Long userId, Long postId) {
+    // ... 검증 + PostLike INSERT ...
+    postRepository.incrementLikeCount(postId);  // SET likeCount = likeCount + 1
+    return postLike;
+}
+```
+
+**장점**: 단순, 정확, 트랜잭션 보장
+**한계**: hot post 에서 posts 행 잠금 경합 (초당 수백 UPDATE 동일 행)
+
+### 14.4 Stage 2 — Redis Write-behind 버퍼 (향후)
+
+```
+[사용자 좋아요 클릭]
+    ↓
+[PostLikeService.like()]
+    ├── PostLike INSERT → post_likes 테이블 (즉시)
+    └── Redis INCR post:{id}:like_delta (즉시, DB UPDATE 대신)
+
+[Scheduler (30초~1분 주기)]
+    ├── Redis GETDEL post:*:like_delta
+    └── UPDATE posts SET like_count = like_count + {delta} WHERE id = ?
+        → 30초간 누적된 delta 를 한 번에 반영
+```
+
+| 항목 | 현재 (Stage 1) | Stage 2 |
+|------|---------------|---------|
+| posts UPDATE 빈도 | 좋아요 1건당 1회 | 30초당 1회 (배치) |
+| 초당 100 좋아요 시 | 100 UPDATE/초 | ~2 UPDATE/분 |
+| 정확도 | 실시간 정확 | 최대 30초 지연 (SNS 허용 범위) |
+| 복잡성 | 낮음 | Redis 의존 추가 |
+
+### 14.5 Stage 3 — 이벤트 기반 비동기 (향후)
+
+```
+[좋아요 API]
+    ├── PostLike INSERT (동기)
+    └── Kafka PRODUCE "like.created" event (비동기)
+
+[Like Count Consumer]
+    ├── 이벤트 수집 (버퍼링)
+    └── 주기적 batch UPDATE posts SET like_count = ...
+```
+
+### 14.6 post_likes 테이블 자체의 쓰기 최적화
+
+| 기법 | 설명 |
+|------|------|
+| **UNIQUE 인덱스 부담 감소** | 부분 인덱스 (`WHERE deleted_at IS NULL`) 사용 시 soft deleted 행 제외 → 인덱스 크기 축소 |
+| **파티셔닝 (향후)** | `post_id` range 또는 hash 파티셔닝 → hot partition 분산 |
+| **Batch INSERT** | 클라이언트 요청을 짧은 시간 내 모아서 batch insert (Kafka Consumer 패턴) |
+| **Connection Pool 튜닝** | `HikariCP.maximum-pool-size` 확대 + `statement-cache-size` 설정 |
+
+### 14.7 모니터링 지표
+
+| 지표 | 임계값 | 조치 |
+|------|--------|------|
+| `post_likes` INSERT 지연 | > 100ms | 인덱스 점검, 커넥션 풀 확대 |
+| `posts` UPDATE 지연 (likeCount) | > 50ms | Stage 2 Redis 버퍼 도입 검토 |
+| DB CPU 사용률 | > 70% | 읽기 복제본 분리, 쓰기 최적화 |
+| 데드락 발생 | > 0 | 잠금 순서 검토 (like 는 단일 행이므로 발생 가능성 낮음) |
+
+## 15. Flyway 마이그레이션 (V5)
 
 ```sql
 -- V5: 좋아요 테이블 생성
