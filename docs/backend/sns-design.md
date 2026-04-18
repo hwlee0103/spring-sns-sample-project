@@ -1814,3 +1814,20 @@ src/main/resources/http/follow.sh   # Follow API (15 steps)
 - [x] AuthFlow MockMvc 통합 테스트 작성 (2026-04-17, 12 scenarios)
 - [ ] RateLimitFilter / AuthEventListener 단위 테스트 분리 (별도 과제)
 - [x] PostgreSQL 마이그레이션 (Flyway) — 2026-04-18
+
+### Review #15~#16 미해결 (detect)
+
+- [ ] #152 — ErrorType `config/` → `domain/common/` 패키지 이동 (도메인→인프라 역의존 해소)
+- [ ] #153 — PostResponse.from() lazy loading fragility (`PostService.create` 후 fetch join 없이 author 접근)
+- [ ] #155 — AbsoluteSessionTimeoutFilter createdAt null 첫 요청 timeout 미검사 (`else if` → `if` 분리)
+- [ ] #156 — SecurityConfig CSRF ignore `/api/v1/auth/login` HTTP method 미제한 (POST 전용 변경)
+- [ ] #158 — PostController/FollowController `requireAuth` 중복 (`@PreAuthorize` 또는 유틸 추출)
+- [ ] #161 — FollowCount.deletedAt 미사용 (BaseEntity 상속이지만 hard delete 만 사용 — Javadoc 명시)
+
+### QA Test #1 권장 사항
+
+- [ ] T-1 — HikariCP 커넥션 풀 prod 명시 설정 (`maximum-pool-size`, `minimum-idle`, `connection-timeout`)
+- [ ] 동시성 race 테스트 (JMeter/k6 또는 Testcontainers PostgreSQL)
+- [ ] Rate limit 429 임계값 테스트 (`RateLimitFilterTest` 단위 분리)
+- [ ] AuthEventListener 로그 마스킹 테스트 (Logback `ListAppender`)
+- [ ] 동시 세션 제한 (maxSessions=3) 테스트 (Redis Testcontainers)
