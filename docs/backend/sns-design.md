@@ -2130,3 +2130,4 @@ src/main/resources/http/follow.sh   # Follow API (15 steps)
 - [ ] AuthEventListener 로그 마스킹 테스트 (Logback `ListAppender`)
 - [ ] 동시 세션 제한 (maxSessions=3) 테스트 (Redis Testcontainers)
 - [ ] Follow 기능 프론트-백엔드 API 연동 (features/follow → /api/v1/user/{id}/follow)
+- [ ] like.sh 좋아요 테스트 Shell 스크립트 생성
