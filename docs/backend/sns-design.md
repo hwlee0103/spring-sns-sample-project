@@ -104,21 +104,319 @@ com.lecture.spring_sns_sample_project
 
 ### 4.2 Post
 
-| 필드 | 타입 | 제약 |
+> **참고 모델**: Twitter/X (Tweet · Reply · Quote · Repost), Threads (Post · Reply), Reddit (Post · Comment), Instagram (Post · Story)
+
+#### 4.2.0 게시글 유형
+
+| 유형 | parentId | quoteId | repostId | content | 설명 |
+|------|----------|---------|----------|---------|------|
+| **일반 게시글** | null | null | null | 필수 | 독립적인 새 게시글 |
+| **답글 (Reply)** | 부모 게시글 ID | null | null | 필수 | 특정 게시글에 대한 답글. 스레드 형성 |
+| **인용 (Quote)** | null | 인용 게시글 ID | null | 필수 | 다른 게시글을 인용하며 본인 의견 추가 (Twitter Quote Tweet) |
+| **리포스트 (Repost)** | null | null | 원본 게시글 ID | null (없음) | 원본을 그대로 공유 (Twitter Retweet). 본인 콘텐츠 없음 |
+| **답글+인용** | 부모 ID | 인용 ID | null | 필수 | 답글을 달면서 다른 게시글 인용 (Twitter 허용) |
+
+> **핵심 규칙**: `repostId != null` 이면 content 는 반드시 null. 리포스트는 원본을 그대로 보여주므로 자체 콘텐츠를 가질 수 없다.
+> `repostId == null` 이면 content 는 필수 (일반/답글/인용 모두 본문 필요).
+
+#### Entity 필드
+
+| 필드 | 타입 | 제약 | 설명 |
+|------|------|------|------|
+| id | Long | PK, IDENTITY | — |
+| author | User | `@ManyToOne(LAZY)`, FK 제약 없음 | 작성자 |
+| content | String | nullable, max 500자 | 게시글 본문. 리포스트 시 null |
+| parentId | Long | nullable | 답글 대상 게시글 ID. null = 최상위 게시글 |
+| quoteId | Long | nullable | 인용 대상 게시글 ID. null = 인용 아님 |
+| repostId | Long | nullable | 리포스트 원본 게시글 ID. null = 리포스트 아님 |
+| replyCount | long | not null, default 0 | 이 게시글에 달린 답글 수 (비정규화) |
+| repostCount | long | not null, default 0 | 이 게시글의 리포스트 수 (비정규화) |
+| likeCount | long | not null, default 0 | 좋아요 수 (비정규화) |
+| viewCount | long | not null, default 0 | 조회 수 (비정규화) |
+| shareCount | long | not null, default 0 | 외부 공유 수 (비정규화) |
+| createdAt | Instant | not null (BaseEntity) | 생성 시각 |
+| updatedAt | Instant | not null (BaseEntity) | 수정 시각 |
+| deletedAt | Instant | nullable (BaseEntity) | 소프트 삭제 시각 |
+
+> **참조 ID 를 `@ManyToOne` 대신 `Long` 으로 선택한 이유**:
+> - 피드 조회 시 N+1 방지 — 참조 게시글은 별도 API 호출로 lazy 로딩
+> - JSON 순환 참조 방지 — Post → Post 자기 참조 시 직렬화 무한 루프
+> - FK 제약 없음 정책과 일관 — 삭제된 게시글의 답글/인용이 고아 상태여도 허용 (Twitter 처럼 "이 게시글은 삭제되었습니다" 표시)
+
+#### PostType (enum — 저장하지 않고 유도)
+
+```java
+public enum PostType {
+    ORIGINAL,  // 일반 게시글
+    REPLY,     // 답글
+    QUOTE,     // 인용
+    REPOST;    // 리포스트
+
+    public static PostType of(Post post) {
+        if (post.getRepostId() != null) return REPOST;
+        if (post.getQuoteId() != null) return QUOTE;
+        if (post.getParentId() != null) return REPLY;
+        return ORIGINAL;
+    }
+}
+```
+
+> **DB 컬럼으로 저장하지 않는 이유**: parentId/quoteId/repostId 조합에서 항상 유도 가능. 별도 컬럼은 불일치 위험만 추가.
+
+#### 수정 정책 (Edit Window)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  게시글 작성                                                 │
+│  ├── 0~20분: 수정 가능 (updateContent)                       │
+│  │   └── updatedAt 갱신 → 프론트에서 "(수정됨)" 표시          │
+│  ├── 20분 이후: 수정 불가 → PostException.editWindowExpired  │
+│  └── 삭제는 항상 가능 (시간 제한 없음)                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+| 규칙 | 설명 | 참고 서비스 |
+|------|------|-----------|
+| **20분 수정 윈도우** | 오타 수정 여유 제공 + 바이럴 후 광고성 수정 방지 | Twitter/X: 30분 (Blue 전용), Threads: 5분 |
+| **리포스트 수정 불가** | 자체 콘텐츠가 없으므로 수정 대상 없음 | Twitter: Retweet 수정 불가 |
+| **삭제 시간 제한 없음** | 사용자의 콘텐츠 삭제 권리 보장 | 전 플랫폼 공통 |
+| **수정 이력 (향후)** | 수정 전 원본 보존 → 신뢰도 보장 | Twitter: 수정 이력 공개 |
+
+```java
+public static final int EDIT_WINDOW_MINUTES = 20;
+
+public boolean isEditable() {
+    return repostId == null  // 리포스트는 수정 불가
+        && Duration.between(createdAt, Instant.now()).toMinutes() < EDIT_WINDOW_MINUTES;
+}
+
+public void updateContent(String content) {
+    if (!isEditable()) {
+        throw PostException.editWindowExpired();
+    }
+    // ... content 검증 + 갱신
+}
+```
+
+#### 비정규화 카운트 전략
+
+FollowCount 와 동일한 DB 원자적 UPDATE 방식. 다만 별도 테이블이 아닌 **Post 엔티티에 직접 임베드**.
+
+```java
+// PostRepository
+@Modifying
+@Query("UPDATE Post p SET p.replyCount = p.replyCount + 1 WHERE p.id = :postId")
+int incrementReplyCount(@Param("postId") Long postId);
+
+@Modifying
+@Query("UPDATE Post p SET p.likeCount = p.likeCount + 1 WHERE p.id = :postId")
+int incrementLikeCount(@Param("postId") Long postId);
+
+// ... decrement, repost, view, share 동일 패턴
+```
+
+| 결정 | 선택 | 근거 |
 |------|------|------|
-| id | Long | PK, IDENTITY |
-| author | User | `@ManyToOne(LAZY)`, FK 제약 없음 |
-| content | String | not null, 1~500자 |
-| createdAt | Instant | not null, 생성 시 자동 설정 |
-| metadata | JSONB (향후) | nullable — 미디어/위치/태그 등 유연한 확장 데이터 |
+| 별도 테이블 vs 임베드 | **Post 엔티티 임베드** | 피드 조회 시 카운트가 항상 필요. JOIN 없이 단일 행으로 완결 |
+| Entity 메서드 vs DB UPDATE | **DB 원자적 UPDATE** | FollowCount 와 동일 — lost update 방지. `SET count = count + 1` |
+| 조회수 갱신 | **비동기 배치 (향후)** | 매 조회마다 UPDATE 는 hot post 에서 병목. Redis INCR → 주기적 batch flush 권장 |
 
-**불변식**
-- `author`: not null
-- `content`: not blank, 500자 이하
+#### Soft Delete
 
-**도메인 메서드**
-- `updateContent(content)` — 길이/blank 검증
-- `isAuthor(userId)` — 권한 체크 헬퍼
+```java
+/** 소프트 삭제 — 답글 스레드에서 "삭제된 게시글" 표시를 위해 행 유지. */
+public void softDelete() {
+    this.deletedAt = Instant.now();
+    this.content = null;  // 콘텐츠 제거 (개인정보/저작권)
+}
+
+public boolean isDeleted() {
+    return deletedAt != null;
+}
+```
+
+> **Twitter/X 모델**: 삭제된 트윗의 답글은 남아있고, 원본 위치에 "이 트윗은 삭제되었습니다" 표시. 스레드 구조 유지.
+> **content null 처리**: 삭제 시 content 를 null 로 변경하여 개인정보/저작권 콘텐츠 즉시 제거. deletedAt 과 author 정보는 유지.
+
+#### 불변식
+
+- `author`: not null (모든 게시글에 작성자 필수)
+- `content`: 리포스트가 아닌 경우 not blank + 500자 이하 / 리포스트인 경우 null
+- `repostId != null` 이면 `content == null` (상호 배타)
+- `repostId != null` 이면 `parentId == null && quoteId == null` (리포스트는 단독 행위)
+- 자기 자신을 참조하는 parentId/quoteId/repostId 금지
+
+#### 도메인 메서드
+
+| 메서드 | 설명 |
+|--------|------|
+| `Post(author, content)` | 일반 게시글 생성. content not blank 검증 |
+| `Post.reply(author, content, parentId)` | 답글 생성. parentId not null 검증 |
+| `Post.quote(author, content, quoteId)` | 인용 생성. quoteId not null + content not blank |
+| `Post.repost(author, repostId)` | 리포스트 생성. content = null 강제 |
+| `updateContent(content)` | 20분 내 수정. isEditable 검증 |
+| `softDelete()` | content null 처리 + deletedAt 설정 |
+| `isEditable()` | 수정 가능 여부 (20분 윈도우 + 리포스트 제외) |
+| `isDeleted()` | deletedAt != null |
+| `isAuthor(userId)` | 권한 체크 헬퍼 |
+| `getType()` | PostType 유도 (ORIGINAL/REPLY/QUOTE/REPOST) |
+
+#### 인덱스 전략
+
+```sql
+-- 기존
+CREATE INDEX idx_posts_author_id ON posts (author_id);
+
+-- 신규: 스레드(답글) 조회
+CREATE INDEX idx_posts_parent_id ON posts (parent_id) WHERE parent_id IS NOT NULL;
+
+-- 신규: 인용 목록 조회
+CREATE INDEX idx_posts_quote_id ON posts (quote_id) WHERE quote_id IS NOT NULL;
+
+-- 신규: 리포스트 목록 조회
+CREATE INDEX idx_posts_repost_id ON posts (repost_id) WHERE repost_id IS NOT NULL;
+
+-- 신규: 사용자 타임라인 (프로필 피드)
+CREATE INDEX idx_posts_author_created ON posts (author_id, created_at DESC);
+
+-- 신규: 스레드 페이징 (답글 최신순)
+CREATE INDEX idx_posts_parent_created ON posts (parent_id, created_at DESC)
+    WHERE parent_id IS NOT NULL;
+```
+
+> **부분 인덱스**: parentId/quoteId/repostId 는 대부분 null (일반 게시글). `WHERE ... IS NOT NULL` 부분 인덱스로 인덱스 크기 최소화 (PostgreSQL 전용, follows 패턴과 동일).
+
+#### API 계약
+
+| Method | Path | 설명 | 인증 |
+|--------|------|------|------|
+| POST | `/api/v1/post` | 게시글 작성 (일반/답글/인용/리포스트) | 인증 |
+| GET | `/api/v1/post/{id}` | 게시글 단건 조회 | 공개 |
+| GET | `/api/v1/post` | 피드 (전체 최신순, 페이징) | 공개 |
+| PUT | `/api/v1/post/{id}` | 게시글 수정 (20분 내) | 인증 (작성자) |
+| DELETE | `/api/v1/post/{id}` | 게시글 삭제 (soft delete) | 인증 (작성자) |
+| GET | `/api/v1/post/{id}/replies` | 답글 목록 (스레드) | 공개 |
+| GET | `/api/v1/post/{id}/quotes` | 인용 목록 | 공개 |
+| GET | `/api/v1/user/{id}/posts` | 사용자의 게시글 목록 | 공개 |
+
+**POST /api/v1/post — 통합 생성 엔드포인트**
+
+```json
+// 일반 게시글
+{ "content": "오늘 날씨가 좋네요" }
+
+// 답글
+{ "content": "저도요!", "parentId": 42 }
+
+// 인용
+{ "content": "이 글 정말 공감합니다", "quoteId": 42 }
+
+// 리포스트 (content 없음)
+{ "repostId": 42 }
+
+// 답글 + 인용 (동시)
+{ "content": "이 글 보셨나요?", "parentId": 10, "quoteId": 42 }
+```
+
+```json
+// Response 201
+{
+  "id": 100,
+  "content": "오늘 날씨가 좋네요",
+  "author": { "id": 1, "nickname": "alice" },
+  "type": "ORIGINAL",
+  "parentId": null,
+  "quoteId": null,
+  "repostId": null,
+  "replyCount": 0,
+  "repostCount": 0,
+  "likeCount": 0,
+  "viewCount": 0,
+  "shareCount": 0,
+  "editable": true,
+  "createdAt": "2026-04-18T06:00:00Z",
+  "updatedAt": "2026-04-18T06:00:00Z"
+}
+```
+
+**PUT /api/v1/post/{id} — 수정 (20분 윈도우)**
+
+```json
+// Request
+{ "content": "오타 수정: 오늘 날씨가 정말 좋네요!" }
+
+// Response 200 — 수정 성공
+{ ..., "editable": true, "updatedAt": "2026-04-18T06:15:00Z" }
+
+// Error 400 — 수정 윈도우 만료
+{ "message": "게시글 수정은 작성 후 20분 이내에만 가능합니다." }
+```
+
+#### DTO 설계
+
+```java
+// 생성 요청 — 통합 (일반/답글/인용/리포스트)
+public record PostCreateRequest(
+    @Size(max = 500) String content,  // 리포스트 시 null 허용
+    Long parentId,                     // 답글 대상 (선택)
+    Long quoteId,                      // 인용 대상 (선택)
+    Long repostId                      // 리포스트 대상 (선택)
+) {}
+
+// 수정 요청
+public record PostUpdateRequest(
+    @NotBlank @Size(max = 500) String content
+) {}
+
+// 응답
+public record PostResponse(
+    Long id,
+    String content,
+    UserSummaryResponse author,
+    PostType type,
+    Long parentId,
+    Long quoteId,
+    Long repostId,
+    PostResponse quotedPost,    // 인용된 게시글 (1단계만 embed)
+    long replyCount,
+    long repostCount,
+    long likeCount,
+    long viewCount,
+    long shareCount,
+    boolean editable,
+    Instant createdAt,
+    Instant updatedAt
+) {
+    public static PostResponse from(Post post) { ... }
+    public static PostResponse from(Post post, Post quotedPost) { ... }
+}
+```
+
+#### 대규모 SNS 설계 비교
+
+| 기능 | Twitter/X | Threads | Reddit | **이 프로젝트** |
+|------|-----------|---------|--------|-----------------|
+| 일반 게시글 | Tweet | Post | Post | ✅ ORIGINAL |
+| 답글 | Reply (in_reply_to) | Reply (parent) | Comment (parent_id) | ✅ REPLY (parentId) |
+| 인용 | Quote Tweet | ❌ | ❌ | ✅ QUOTE (quoteId) |
+| 리포스트 | Retweet | Repost | Crosspost | ✅ REPOST (repostId) |
+| 수정 | 30분 (Blue) | 5분 | 무제한 | ✅ 20분 |
+| 삭제 | 즉시 | 즉시 | 즉시 (content 제거) | ✅ Soft delete + content null |
+| 좋아요 수 | ✅ | ✅ | ✅ (upvote) | ✅ likeCount |
+| 답글 수 | ✅ | ✅ | ✅ | ✅ replyCount |
+| 리포스트 수 | ✅ | ❌ | ❌ | ✅ repostCount |
+| 조회 수 | ✅ (2022~) | ❌ | ✅ | ✅ viewCount |
+| 공유 수 | ❌ | ❌ | ❌ | ✅ shareCount |
+| 수정 이력 | ✅ | ❌ | ✅ (edited 표시) | ⬜ 향후 |
+
+#### 향후 확장
+
+- [ ] **수정 이력 (PostEditHistory)** — 수정 전 원본 content + 수정 시각 기록. Twitter 의 Edit History 참고
+- [ ] **좋아요 (PostLike)** — `post_likes(id, post_id, user_id, created_at)` + UNIQUE(post_id, user_id)
+- [ ] **북마크 (PostBookmark)** — 비공개 저장
+- [ ] **미디어 첨부 (JSONB metadata)** — §4.2.1 참조
+- [ ] **해시태그/멘션 파싱** — content 에서 `#tag`, `@user` 추출 → 별도 테이블
+- [ ] **조회수 비동기 갱신** — Redis INCR → 주기적 batch flush (hot post UPDATE 경합 방지)
 
 ### 4.2.1 미디어 서비스 설계 (향후)
 
