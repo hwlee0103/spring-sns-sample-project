@@ -250,6 +250,9 @@ public interface PostRepository extends JpaRepository<Post, Long> {
         countQuery = "SELECT COUNT(p) FROM Post p WHERE p.quoteId = :quoteId AND p.deletedAt IS NULL")
     Page<Post> findQuotesByQuoteId(@Param("quoteId") Long quoteId, Pageable pageable);
 
+    /** 중복 인용 확인 — 같은 사용자가 같은 게시글을 2회 이상 인용했는지 */
+    boolean existsByQuoteIdAndAuthorId(Long quoteId, Long authorId);
+
     /** 사용자 삭제 시 해당 사용자의 모든 게시글 물리 삭제 */
     @Modifying
     @Query("DELETE FROM Post p WHERE p.author = :author")
@@ -315,10 +318,12 @@ public class PostService {
             postRepository.save(post);
             postRepository.incrementRepostCount(repostId);
         } else if (quoteId != null) {
-            validateQuoteTarget(quoteId);
+            validateQuoteTarget(quoteId, authorId);
             post = Post.quote(author, content, quoteId);
             if (parentId != null) post.setParentId(parentId); // 답글+인용
             postRepository.save(post);
+            // 인용도 리포스트에 포함 — 원본의 repostCount 증가
+            postRepository.incrementRepostCount(quoteId);
         } else if (parentId != null) {
             validateReplyTarget(parentId);
             post = Post.reply(author, content, parentId);
@@ -332,33 +337,155 @@ public class PostService {
         return post;
     }
 
-    /** 수정 — 20분 윈도우 */
+    /**
+     * 수정 — 20분 윈도우.
+     *
+     * 답글(parentId != null)인 경우에도 동일한 수정 규칙 적용.
+     * parentId 자체는 변경 불가 (답글 대상 이동 금지).
+     * 리포스트는 content 가 없으므로 수정 대상 자체가 아님 (isEditable 에서 차단).
+     */
     @Transactional
     public Post update(Long requesterId, Long id, String content) {
         Post post = getById(id);
         if (!post.isAuthor(requesterId)) throw PostException.forbidden(id);
-        post.updateContent(content);  // isEditable 내부 검증
+        post.updateContent(content);  // isEditable 내부 검증 (20분 + 리포스트 제외)
         return post;
     }
 
-    /** 삭제 — soft delete */
+    /**
+     * 삭제 — soft delete.
+     *
+     * 답글(parentId != null) 삭제 시 부모 게시글의 replyCount 를 감소시킨다.
+     * 리포스트(repostId != null) 삭제 시 원본 게시글의 repostCount 를 감소시킨다.
+     * 일반 게시글/인용 삭제 시에는 부모 카운트 감소 없음.
+     */
     @Transactional
     public void delete(Long requesterId, Long id) {
         Post post = getById(id);
         if (!post.isAuthor(requesterId)) throw PostException.forbidden(id);
         post.softDelete();
-        // 부모 게시글 카운트 감소
+        // 답글인 경우 — 부모 게시글의 답글 수 감소
         if (post.getParentId() != null) {
             postRepository.decrementReplyCount(post.getParentId());
         }
+        // 리포스트인 경우 — 원본 게시글의 리포스트 수 감소
         if (post.getRepostId() != null) {
             postRepository.decrementRepostCount(post.getRepostId());
+        }
+        // 인용인 경우 — 인용된 원본 게시글의 리포스트 수 감소 (인용도 리포스트에 포함)
+        if (post.getQuoteId() != null) {
+            postRepository.decrementRepostCount(post.getQuoteId());
+        }
+    }
+
+    /**
+     * 답글 대상 검증 — 부모 게시글이 존재하고 삭제되지 않았는지 확인.
+     * 삭제된 게시글에도 답글을 허용할지는 정책 결정 사항.
+     * 현재: 삭제된 게시글에는 답글 금지 (스레드 확장 방지).
+     */
+    private void validateReplyTarget(Long parentId) {
+        Post parent = postRepository.findWithAuthorById(parentId)
+            .orElseThrow(() -> PostException.notFound(parentId));
+        if (parent.isDeleted()) {
+            throw PostException.replyToDeletedPost();
+        }
+    }
+
+    /**
+     * 인용 대상 검증 — 인용 게시글 존재 확인 + 본인 중복 인용 확인.
+     * 인용은 "임베드가 포함된 독립 게시글"이므로 삭제된 원본도 인용 가능 (링크는 "[삭제됨]" 표시).
+     * 단, 같은 사용자가 같은 게시글을 2회 이상 인용하는 것은 금지 (스팸 방지).
+     */
+    private void validateQuoteTarget(Long quoteId, Long authorId) {
+        if (!postRepository.existsById(quoteId)) {
+            throw PostException.notFound(quoteId);
+        }
+        if (postRepository.existsByQuoteIdAndAuthorId(quoteId, authorId)) {
+            throw PostException.duplicateQuote();
+        }
+    }
+
+    private void validateRepostTarget(Long repostId) {
+        Post original = postRepository.findWithAuthorById(repostId)
+            .orElseThrow(() -> PostException.notFound(repostId));
+        if (original.isDeleted()) {
+            throw PostException.repostDeletedPost();
+        }
+        // 리포스트의 리포스트 금지 (원본만 리포스트 가능)
+        if (original.getRepostId() != null) {
+            throw PostException.repostOfRepost();
         }
     }
 
     // ... getById, getFeed, getReplies, getQuotes, getUserPosts
 }
 ```
+
+### 4.1 답글 생성 흐름
+
+```
+[사용자] POST /api/v1/post { "content": "저도요!", "parentId": 42 }
+           ↓
+[PostService.create]
+  1. User 존재 확인 (authorId → User)
+  2. parentId != null → validateReplyTarget(42)
+     → postRepository.findWithAuthorById(42)
+     → 부모 존재 확인 + 삭제 여부 확인
+  3. Post.reply(author, "저도요!", 42) → Post 생성
+     → parentId = 42, content = "저도요!", type = REPLY
+  4. postRepository.save(post) → INSERT
+  5. postRepository.incrementReplyCount(42) → 부모 replyCount + 1
+  6. return post → 201 Created
+```
+
+### 4.2 답글 수정/삭제 시 검증
+
+| 작업 | 검증 | 카운트 변동 |
+|------|------|------------|
+| 답글 수정 | `isAuthor` + `isEditable` (20분 윈도우) | 없음 (parentId 변경 불가) |
+| 답글 삭제 | `isAuthor` → `softDelete()` → `parentId != null` 이면 부모 `replyCount - 1` | replyCount - 1 |
+| 일반 글 삭제 | `isAuthor` → `softDelete()` → `parentId == null` 이면 카운트 변동 없음 | 없음 |
+
+> **parentId 변경 불가**: 답글을 다른 게시글로 이동하는 것은 허용하지 않는다. 수정은 content 만 대상.
+
+### 4.3 인용 생성 흐름
+
+인용(Quote)은 **임베드가 포함된 독립적인 게시글**이다. 원본 게시글이 카드 형태로 임베디드되고, 인용자의 본인 의견이 함께 표시된다.
+
+```
+[사용자] POST /api/v1/post { "content": "이 글 정말 공감합니다", "quoteId": 42 }
+           ↓
+[PostService.create]
+  1. User 존재 확인 (authorId → User)
+  2. quoteId != null → validateQuoteTarget(42, authorId)
+     → postRepository.existsById(42) → 인용 대상 존재 확인
+     → postRepository.existsByQuoteIdAndAuthorId(42, authorId) → 중복 인용 확인
+  3. Post.quote(author, "이 글 정말 공감합니다", 42) → Post 생성
+     → quoteId = 42, content = "이 글 정말 공감합니다", type = QUOTE
+  4. postRepository.save(post) → INSERT
+  5. postRepository.incrementRepostCount(42) → 원본 repostCount + 1 (인용도 리포스트에 포함)
+  6. return post → 201 Created
+```
+
+**인용 규칙**:
+
+| 규칙 | 설명 | 참고 |
+|------|------|------|
+| 인용 = 독립 게시글 | 인용글은 자체 content 필수. 원본은 임베드로 표시 | Twitter Quote Tweet |
+| 인용도 리포스트 카운트에 포함 | 원본의 `repostCount` 를 증가 — 인용+리포스트 합산 | Twitter: "Repost" 버튼에 Quote 포함 |
+| 중복 인용 금지 | 같은 사용자가 같은 게시글을 2회 이상 인용 불가 (스팸 방지) | — |
+| 삭제된 원본도 인용 가능 | 인용은 독립 게시글이므로 원본 삭제와 무관. 프론트에서 "[삭제된 게시글]" 표시 | Twitter 동작 |
+| 인용 삭제 시 원본 repostCount 감소 | 인용글 soft delete → 원본 `decrementRepostCount` | — |
+| 인용의 인용 가능 | 인용글 자체도 다시 인용 가능 (재귀) | Twitter 허용 |
+
+### 4.4 인용 수정/삭제
+
+| 작업 | 검증 | 카운트 변동 |
+|------|------|------------|
+| 인용 수정 | `isAuthor` + `isEditable` (20분) | 없음 (quoteId 변경 불가, content 만 수정) |
+| 인용 삭제 | `isAuthor` → `softDelete()` → `quoteId != null` → 원본 `repostCount - 1` | repostCount - 1 |
+
+> **quoteId 변경 불가**: 인용 대상을 다른 게시글로 변경하는 것은 허용하지 않는다. 수정은 content 만 대상.
 
 ## 5. 수정 정책 상세
 
