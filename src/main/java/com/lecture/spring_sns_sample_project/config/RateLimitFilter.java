@@ -17,7 +17,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 /**
  * IP 기반 rate limiting 필터.
  *
- * <p>POST 인증 엔드포인트({@code /api/auth/login}, {@code /api/user})에 대해 IP 당 분당 요청 수를 제한한다. {@code
+ * <p>POST 인증 엔드포인트({@code /api/v1/auth/login}, {@code /api/v1/user})에 대해 IP 당 분당 요청 수를 제한한다. {@code
  * X-Forwarded-For} 는 스푸핑 가능하므로 {@code request.getRemoteAddr()} 만 사용한다.
  *
  * <p>Caffeine 캐시를 사용하여 개별 엔트리가 10분 미사용 시 자동 만료되고, 최대 엔트리 수를 초과하면 가장 오래된 것부터 제거된다 (전체 clear 대신 개별
@@ -27,7 +27,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  */
 public class RateLimitFilter extends OncePerRequestFilter {
 
-  private static final Set<String> RATE_LIMITED_PATHS = Set.of("/api/auth/login", "/api/user");
+  private static final Set<String> RATE_LIMITED_PATHS =
+      Set.of("/api/v1/auth/login", "/api/v1/user");
 
   private final int ipRequestsPerMinute;
   private final Cache<String, Bucket> ipBuckets;
