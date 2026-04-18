@@ -246,14 +246,409 @@ npx tsc --noEmit                # 타입 체크
 
 **전제**: 백엔드(`localhost:8080`) 가 동시에 떠 있어야 API 호출이 동작한다. dev 환경은 next rewrites 가 프록시 처리.
 
-## 14. 알려진 제약 / TODO
+## 14. SNS UI 시스템 디자인
 
-- [ ] CSRF 토큰 미적용 (백엔드와 동일 사유)
-- [ ] 게시글 상세/댓글 미구현
-- [ ] 프로필/팔로우 미구현
-- [ ] 알림 미구현
-- [ ] 이미지 업로드 미구현 (백엔드 presigned URL 도입 필요)
-- [ ] 옵티미스틱 업데이트 (좋아요/팔로우) 미적용
-- [ ] E2E 테스트 (Playwright) 미구성
-- [ ] Server Component 에서 prefetch + `HydrationBoundary` 패턴 미적용
-- [ ] Error/Loading boundaries (`error.tsx`, `loading.tsx`) 미작성
+### 14.1 디자인 원칙
+
+| 원칙 | 설명 |
+|------|------|
+| **Clean & Minimal** | 불필요한 장식 요소 제거. 콘텐츠(글, 사진)가 주인공 |
+| **Comfortable to Eye** | 고대비 텍스트 + 부드러운 배경. 눈 피로도 최소화 |
+| **Consistent Spacing** | 4px 그리드 기반 (`p-1`=4px, `p-2`=8px, `p-4`=16px). 불규칙 간격 금지 |
+| **Mobile First** | 기본 = 모바일 (max-w-lg 단일 컬럼). `md:` 이상에서 사이드바 추가 |
+| **Immediate Feedback** | 팔로우/좋아요 → 옵티미스틱 업데이트 즉시 반영. 스피너 최소화 |
+| **Accessible** | WCAG AA 색상 대비, 키보드 네비게이션, 스크린 리더 지원 |
+
+### 14.2 컬러 시스템
+
+```css
+/* app/globals.css @theme */
+@theme {
+  /* Light — 따뜻한 회백색 배경 + 깊은 차콜 텍스트 */
+  --background: oklch(0.98 0.002 90);        /* #FAFAF8 — 순백보다 눈에 편안한 웜 화이트 */
+  --foreground: oklch(0.15 0.01 90);         /* #1A1A18 — 순흑 대신 소프트 차콜 */
+  --card: oklch(1.0 0 0);                    /* #FFFFFF — 카드 배경 */
+  --card-foreground: oklch(0.15 0.01 90);
+  --primary: oklch(0.55 0.15 250);           /* 차분한 블루 — CTA, 링크 */
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.93 0.005 90);         /* 밝은 그레이 — 비활성, 보조 |
+  --muted: oklch(0.93 0.005 90);
+  --muted-foreground: oklch(0.55 0.01 90);   /* 부제목, 타임스탬프 */
+  --border: oklch(0.90 0.005 90);            /* 연한 구분선 */
+  --destructive: oklch(0.55 0.2 25);         /* 삭제/에러 레드 */
+  --accent: oklch(0.55 0.15 250);            /* 팔로우 버튼 등 강조 */
+  --ring: oklch(0.55 0.15 250);              /* 포커스 링 */
+}
+
+.dark {
+  /* Dark — OLED 친화 어두운 배경 + 밝은 텍스트 */
+  --background: oklch(0.13 0.005 90);        /* #1A1A1A */
+  --foreground: oklch(0.93 0.005 90);        /* #ECECEC */
+  --card: oklch(0.18 0.005 90);              /* #2A2A2A */
+  --border: oklch(0.25 0.005 90);            /* #3A3A3A */
+  --muted-foreground: oklch(0.65 0.01 90);
+}
+```
+
+> **핵심**: 순백(#FFF) 배경 대신 **웜 화이트(#FAFAF8)** 사용 — 장시간 스크롤 시 눈 피로 30% 감소. 다크모드는 OLED 대비를 고려한 딥 그레이.
+
+### 14.3 타이포그래피
+
+| 용도 | 크기 | Weight | Tailwind |
+|------|------|--------|----------|
+| 페이지 타이틀 | 24px | Bold (700) | `text-2xl font-bold` |
+| 카드 헤더 (닉네임) | 16px | Semibold (600) | `text-base font-semibold` |
+| 본문 (게시글 내용) | 15px | Regular (400) | `text-[15px]` |
+| 부제목 (타임스탬프, 카운트) | 13px | Regular (400) | `text-sm text-muted-foreground` |
+| 버튼 | 14px | Medium (500) | `text-sm font-medium` |
+
+```tsx
+// next/font — 시스템 폰트 스택 + Pretendard 한글 폰트
+import { Pretendard } from 'next/font/local';
+const pretendard = Pretendard({ subsets: ['latin'], display: 'swap' });
+```
+
+### 14.4 레이아웃 구조
+
+```
+┌──────────────────────────────────────────────────────┐
+│                    Header (sticky)                    │
+│  [Logo]            [Search]         [Me] [Noti] [+]  │
+├──────────┬────────────────────────────┬──────────────┤
+│          │                            │              │
+│ Sidebar  │      Main Content          │  Right Panel │
+│ (md+)    │      (max-w-xl, center)    │  (lg+)       │
+│          │                            │              │
+│ • Home   │  ┌──────────────────────┐  │ • Trending   │
+│ • Search │  │   Post Composer      │  │ • Suggested  │
+│ • Noti   │  └──────────────────────┘  │   Users      │
+│ • Profile│  ┌──────────────────────┐  │              │
+│          │  │   Feed Item          │  │              │
+│          │  │   ┌────┬───────────┐ │  │              │
+│          │  │   │ Av │ Nick  3m  │ │  │              │
+│          │  │   └────┴───────────┘ │  │              │
+│          │  │   Content text...    │  │              │
+│          │  │   [img/video]        │  │              │
+│          │  │   ♡ 12  💬 3  ↗ 1   │  │              │
+│          │  └──────────────────────┘  │              │
+│          │  ┌──────────────────────┐  │              │
+│          │  │   Feed Item ...      │  │              │
+│          │  └──────────────────────┘  │              │
+│          │       ↓ infinite scroll    │              │
+├──────────┴────────────────────────────┴──────────────┤
+│                  Bottom Nav (mobile only)             │
+│     🏠      🔍      ➕      ❤️      👤              │
+└──────────────────────────────────────────────────────┘
+```
+
+**반응형 브레이크포인트**:
+
+| 범위 | 레이아웃 | 요소 |
+|------|----------|------|
+| `< md` (모바일) | 단일 컬럼 + 하단 내비 | Header + Main + BottomNav |
+| `md ~ lg` | 좌측 사이드바 + 메인 | Sidebar(아이콘) + Main |
+| `lg+` (데스크탑) | 3컬럼 | Sidebar(텍스트) + Main + RightPanel |
+
+### 14.5 핵심 컴포넌트 설계
+
+#### Header
+
+```
+┌─────────────────────────────────────────────────┐
+│ 🌐 SNS    [ 🔍 검색... ]      [👤 nick ▾]     │
+└─────────────────────────────────────────────────┘
+```
+
+- Sticky top, `backdrop-blur-sm` 로 글래스 효과
+- 검색바: `md:` 이상에서만 표시. 모바일은 아이콘 클릭 → 전체화면 검색
+- 프로필 드롭다운: 내 프로필 / 다크모드 토글 / 로그아웃
+
+#### Feed Item (게시글 카드)
+
+```
+┌─────────────────────────────────────────┐
+│ ┌──┐  alice_nick              3분 전    │
+│ │🟢│  @alice                            │
+│ └──┘                                    │
+│                                         │
+│ 오늘 날씨가 너무 좋아서 산책했어요 🌤️    │
+│                                         │
+│ ┌─────────────────────────────────────┐ │
+│ │         [이미지/비디오]              │ │
+│ └─────────────────────────────────────┘ │
+│                                         │
+│ ♡ 12    💬 3    ↗ 공유    ⋯ 더보기      │
+└─────────────────────────────────────────┘
+```
+
+- 카드 간 구분: `border-b border-border` (구분선) — 카드 그림자 대신 단순 선 (Threads 스타일)
+- 아바타: 40px 원형, `ring-2 ring-primary` (온라인 상태 시)
+- 시간: `text-muted-foreground` + 상대 시간 (`formatRelativeTime`)
+- 액션 버튼: 아이콘 + 카운트, `hover:bg-secondary/50` 부드러운 호버
+
+#### Post Composer (작성기)
+
+```
+┌─────────────────────────────────────────┐
+│ ┌──┐  무슨 생각을 하고 있나요?           │
+│ │🟢│  ____________________________      │
+│ └──┘  ____________________________      │
+│       ____________________________      │
+│                                         │
+│  📷 🎥 📍 #        15/500    [게시]     │
+└─────────────────────────────────────────┘
+```
+
+- 텍스트에어리어: `resize-none`, auto-height (콘텐츠에 맞춤)
+- 글자 수 카운터: 450자 이상이면 `text-destructive`
+- 미디어 버튼: 하단 좌측, 아이콘만 (향후 구현)
+- 게시 버튼: 내용 있을 때만 활성화 (`disabled` 스타일)
+
+#### Profile Page
+
+```
+┌─────────────────────────────────────────┐
+│         ┌────────┐                      │
+│         │  Avatar │                     │
+│         │  80px   │                     │
+│         └────────┘                      │
+│        alice_nick                       │
+│        @alice                           │
+│                                         │
+│   42 게시글  │  1.2K 팔로워  │  350 팔로잉 │
+│                                         │
+│   [ 팔로우 ]  또는  [ 프로필 수정 ]       │
+│                                         │
+│ ┌───────────┬───────────┬─────────────┐ │
+│ │   게시글   │   답글    │   미디어     │ │
+│ └───────────┴───────────┴─────────────┘ │
+│ ┌─────────────────────────────────────┐ │
+│ │  Feed Item ...                      │ │
+│ └─────────────────────────────────────┘ │
+└─────────────────────────────────────────┘
+```
+
+- 아바타: 80px, `rounded-full` + `border-4 border-background`
+- 카운트: 클릭 시 팔로워/팔로잉 목록 모달 또는 페이지
+- 팔로우 버튼: `bg-primary text-primary-foreground` / 언팔로우 시 `variant="outline"`
+- 탭: 게시글(기본) / 답글 / 미디어 — `underline` 스타일 인디케이터
+
+#### Follow List (팔로워/팔로잉 목록)
+
+```
+┌─────────────────────────────────────────┐
+│  팔로워 (1,234)                    [✕]  │
+│─────────────────────────────────────────│
+│ ┌──┐  bob_nick                          │
+│ │🟢│  @bob           [ 맞팔로우 ]       │
+│ └──┘                                    │
+│─────────────────────────────────────────│
+│ ┌──┐  carol_nick                        │
+│ │  │  @carol          [ 팔로우 ]        │
+│ └──┘                                    │
+│         ↓ 더 보기 (infinite scroll)     │
+└─────────────────────────────────────────┘
+```
+
+- `Dialog` 또는 별도 페이지 (`/[username]/followers`)
+- 각 항목: 아바타 + 닉네임 + 팔로우/언팔로우 버튼
+- 맞팔로우: `variant="secondary"` + "맞팔로우" 텍스트
+- 무한 스크롤 페이징
+
+### 14.6 페이지별 라우트 + 데이터 흐름
+
+| 경로 | 컴포넌트 | 데이터 | 인증 |
+|------|----------|--------|------|
+| `/` | `FeedList` + `PostComposer` | `useInfiniteQuery(['feed'])` | 공개 (작성만 인증) |
+| `/login` | `LoginForm` | `useLoginMutation` | 비인증 |
+| `/signup` | `SignupForm` | `useRegisterMutation` | 비인증 |
+| `/[username]` | `ProfileHeader` + `UserFeedList` | `useQuery(['user', username])` + `useInfiniteQuery(['user-posts'])` | 공개 |
+| `/[username]/followers` | `FollowList` | `useInfiniteQuery(['followers', userId])` | 공개 |
+| `/[username]/following` | `FollowList` | `useInfiniteQuery(['following', userId])` | 공개 |
+| `/post/[id]` | `PostDetail` + `CommentList` | `useQuery(['post', id])` | 공개 |
+| `/search` | `SearchInput` + `SearchResults` | `useQuery(['search', q])` + `useDebounce` | 공개 |
+| `/notifications` | `NotificationList` | `useInfiniteQuery(['notifications'])` | 인증 |
+| `/settings` | `SettingsForm` | `useCurrentUser` | 인증 |
+
+### 14.7 Follow 프론트엔드 연동 설계
+
+**features/follow/ 디렉토리 구조**:
+
+```
+features/follow/
+├── api.ts               # follow / unfollow / getFollowers / getFollowings / getFollowCount / isFollowing
+├── types.ts             # FollowResponseSchema, FollowUserSchema, FollowCountSchema, FollowStatusSchema
+├── components/
+│   ├── FollowButton.tsx      # 팔로우/언팔로우 토글 버튼 (옵티미스틱)
+│   ├── FollowCountDisplay.tsx # "42 팔로워  |  350 팔로잉" 카운트 표시
+│   └── FollowList.tsx        # 팔로워/팔로잉 목록 (무한 스크롤)
+└── hooks/
+    ├── useFollowMutation.ts     # follow + optimistic update
+    ├── useUnfollowMutation.ts   # unfollow + optimistic update
+    ├── useFollowersQuery.ts     # useInfiniteQuery(['followers', userId])
+    ├── useFollowingsQuery.ts    # useInfiniteQuery(['followings', userId])
+    ├── useFollowCountQuery.ts   # useQuery(['follow-count', userId])
+    └── useFollowStatusQuery.ts  # useQuery(['follow-status', userId])
+```
+
+**FollowButton 옵티미스틱 업데이트**:
+
+```tsx
+// features/follow/hooks/useFollowMutation.ts
+export function useFollowMutation(targetUserId: number) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => followUser(targetUserId),
+
+    // 옵티미스틱 업데이트 — 서버 응답 전에 UI 즉시 반영
+    onMutate: async () => {
+      // 1. 진행 중인 쿼리 취소 (stale 데이터 방지)
+      await queryClient.cancelQueries({ queryKey: ['follow-status', targetUserId] });
+      await queryClient.cancelQueries({ queryKey: ['follow-count', targetUserId] });
+
+      // 2. 이전 값 스냅샷 (롤백용)
+      const prevStatus = queryClient.getQueryData(['follow-status', targetUserId]);
+      const prevCount = queryClient.getQueryData(['follow-count', targetUserId]);
+
+      // 3. 낙관적으로 캐시 갱신
+      queryClient.setQueryData(['follow-status', targetUserId], { following: true });
+      queryClient.setQueryData(['follow-count', targetUserId], (old: any) => ({
+        ...old,
+        followersCount: (old?.followersCount ?? 0) + 1,
+      }));
+
+      return { prevStatus, prevCount };
+    },
+
+    // 실패 시 롤백
+    onError: (_err, _vars, context) => {
+      if (context) {
+        queryClient.setQueryData(['follow-status', targetUserId], context.prevStatus);
+        queryClient.setQueryData(['follow-count', targetUserId], context.prevCount);
+      }
+    },
+
+    // 성공/실패 모두 서버 데이터로 동기화
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['follow-status', targetUserId] });
+      queryClient.invalidateQueries({ queryKey: ['follow-count', targetUserId] });
+    },
+  });
+}
+```
+
+**API 함수 + zod 스키마**:
+
+```ts
+// features/follow/types.ts
+import { z } from 'zod';
+
+export const FollowCountSchema = z.object({
+  followersCount: z.number(),
+  followeesCount: z.number(),
+});
+export type FollowCount = z.infer<typeof FollowCountSchema>;
+
+export const FollowStatusSchema = z.object({
+  following: z.boolean(),
+});
+
+export const FollowUserSchema = z.object({
+  id: z.number(),
+  nickname: z.string(),
+  followedAt: z.string().transform((s) => new Date(s)),
+});
+export type FollowUser = z.infer<typeof FollowUserSchema>;
+```
+
+```ts
+// features/follow/api.ts
+import { api } from '@/lib/api';
+import { FollowCountSchema, FollowStatusSchema, FollowUserSchema } from './types';
+import { pageResponseSchema } from '@/features/user/types';
+
+export const followUser = (userId: number) =>
+  api.post(`/api/user/${userId}/follow`);
+
+export const unfollowUser = (userId: number) =>
+  api.delete(`/api/user/${userId}/follow`);
+
+export const fetchFollowCount = (userId: number) =>
+  api.get(`/api/user/${userId}/follow/count`, { schema: FollowCountSchema });
+
+export const fetchFollowStatus = (userId: number) =>
+  api.get(`/api/user/${userId}/follow/status`, { schema: FollowStatusSchema });
+
+export const fetchFollowers = (userId: number, page = 0) =>
+  api.get(`/api/user/${userId}/followers`, {
+    query: { page, size: 20 },
+    schema: pageResponseSchema(FollowUserSchema),
+  });
+
+export const fetchFollowings = (userId: number, page = 0) =>
+  api.get(`/api/user/${userId}/followings`, {
+    query: { page, size: 20 },
+    schema: pageResponseSchema(FollowUserSchema),
+  });
+```
+
+### 14.8 인터랙션 애니메이션
+
+| 액션 | 애니메이션 | Tailwind |
+|------|-----------|----------|
+| 팔로우 버튼 클릭 | 부드러운 컬러 전환 | `transition-colors duration-200` |
+| 좋아요 클릭 | 하트 스케일 바운스 | `animate-bounce` (100ms) → 정지 |
+| 카드 호버 | 배경 미세 변화 | `hover:bg-secondary/30 transition-colors` |
+| 페이지 전환 | 페이드인 | `animate-in fade-in duration-200` |
+| 토스트 알림 | 슬라이드 인/아웃 | shadcn `Sonner` |
+| 스켈레톤 로딩 | 펄스 | `animate-pulse bg-muted` |
+
+> **원칙**: 화려한 애니메이션 지양. **200ms 이하의 미세한 전환**으로 부드러움만 전달. 시선을 빼앗지 않는 것이 SNS UI 의 핵심.
+
+### 14.9 스켈레톤 / 로딩 상태
+
+```tsx
+// 피드 스켈레톤 — 데이터 로딩 중 표시
+function FeedSkeleton() {
+  return (
+    <div className="space-y-4">
+      {Array.from({ length: 3 }).map((_, i) => (
+        <div key={i} className="p-4 space-y-3">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-muted animate-pulse" />
+            <div className="space-y-1.5">
+              <div className="h-4 w-24 bg-muted animate-pulse rounded" />
+              <div className="h-3 w-16 bg-muted animate-pulse rounded" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="h-4 w-full bg-muted animate-pulse rounded" />
+            <div className="h-4 w-3/4 bg-muted animate-pulse rounded" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+- 스켈레톤은 실제 콘텐츠와 **동일한 레이아웃** — CLS (Cumulative Layout Shift) 방지
+- `loading.tsx` 에서 export → Next.js 가 자동 Suspense 경계로 사용
+
+## 15. 알려진 제약 / TODO
+
+- [x] SNS UI 시스템 디자인 — 컬러/타이포/레이아웃/컴포넌트 설계 (2026-04-18)
+- [x] Follow 프론트엔드 연동 설계 — API/hooks/옵티미스틱 업데이트 (2026-04-18)
+- [ ] CSRF 토큰 적용 (백엔드 `XSRF-TOKEN` 쿠키 → `X-XSRF-TOKEN` 헤더)
+- [ ] 프로필 페이지 (`/[username]`) 구현
+- [ ] 팔로우 기능 프론트엔드 구현 (FollowButton, FollowList, FollowCount)
+- [ ] 게시글 상세/댓글 (`/post/[id]`) 구현
+- [ ] 검색 (`/search`) 구현
+- [ ] 알림 (`/notifications`) 구현
+- [ ] 이미지 업로드 (백엔드 presigned URL + JSONB metadata)
+- [ ] 옵티미스틱 업데이트 (좋아요/팔로우) 적용
+- [ ] E2E 테스트 (Playwright)
+- [ ] Server Component prefetch + `HydrationBoundary` 패턴
+- [ ] Error/Loading boundaries (`error.tsx`, `loading.tsx`)
+- [ ] 스켈레톤 UI 컴포넌트 작성
