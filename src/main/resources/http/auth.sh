@@ -57,56 +57,56 @@ NICKNAME="auth테스트_$(date +%s)"
 
 # 1. 회원가입 (permitAll, CSRF 면제)
 REQ_BODY=$(printf '{"email":"%s","password":"%s","nickname":"%s"}' "$EMAIL" "$PASSWORD" "$NICKNAME")
-RESPONSE=$(curl -s -w "\n%{http_code}" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/user" \
+RESPONSE=$(curl -s -w "\n%{http_code}" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/v1/user" \
   -H "Content-Type: application/json" \
   -d "$REQ_BODY")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "1. 회원가입" "POST" "$BASE_URL/api/user" "$REQ_BODY" "201" "$HTTP_CODE" "$BODY"
+check "1. 회원가입" "POST" "$BASE_URL/api/v1/user" "$REQ_BODY" "201" "$HTTP_CODE" "$BODY"
 
 # 2. 비인증 me → 401
-RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X GET "$BASE_URL/api/auth/me")
+RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X GET "$BASE_URL/api/v1/auth/me")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "2. 비인증 me (401)" "GET" "$BASE_URL/api/auth/me" "" "401" "$HTTP_CODE" "$BODY"
+check "2. 비인증 me (401)" "GET" "$BASE_URL/api/v1/auth/me" "" "401" "$HTTP_CODE" "$BODY"
 
 # 3. 로그인 (CSRF 면제)
 REQ_BODY=$(printf '{"email":"%s","password":"%s"}' "$EMAIL" "$PASSWORD")
-RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/auth/login" \
+RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/v1/auth/login" \
   -H "Content-Type: application/json" \
   -d "$REQ_BODY")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "3. 로그인" "POST" "$BASE_URL/api/auth/login" "$REQ_BODY" "200" "$HTTP_CODE" "$BODY"
+check "3. 로그인" "POST" "$BASE_URL/api/v1/auth/login" "$REQ_BODY" "200" "$HTTP_CODE" "$BODY"
 
 # 4. 로그인 후 me → 200
-RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X GET "$BASE_URL/api/auth/me")
+RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X GET "$BASE_URL/api/v1/auth/me")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "4. 로그인 후 me (200)" "GET" "$BASE_URL/api/auth/me" "" "200" "$HTTP_CODE" "$BODY"
+check "4. 로그인 후 me (200)" "GET" "$BASE_URL/api/v1/auth/me" "" "200" "$HTTP_CODE" "$BODY"
 
 # 5. 잘못된 비밀번호 → 401
 REQ_BODY=$(printf '{"email":"%s","password":"wrong_password"}' "$EMAIL")
-RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/auth/login" \
+RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/v1/auth/login" \
   -H "Content-Type: application/json" \
   -d "$REQ_BODY")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "5. 잘못된 비밀번호 (401)" "POST" "$BASE_URL/api/auth/login" "$REQ_BODY" "401" "$HTTP_CODE" "$BODY"
+check "5. 잘못된 비밀번호 (401)" "POST" "$BASE_URL/api/v1/auth/login" "$REQ_BODY" "401" "$HTTP_CODE" "$BODY"
 
 # 6. 로그아웃 (CSRF 필요)
 CSRF=$(get_csrf)
-RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/auth/logout" \
+RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/v1/auth/logout" \
   -H "X-XSRF-TOKEN: $CSRF")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "6. 로그아웃" "POST" "$BASE_URL/api/auth/logout" "" "204" "$HTTP_CODE" "$BODY"
+check "6. 로그아웃" "POST" "$BASE_URL/api/v1/auth/logout" "" "204" "$HTTP_CODE" "$BODY"
 
 # 7. 로그아웃 후 me → 401
-RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X GET "$BASE_URL/api/auth/me")
+RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X GET "$BASE_URL/api/v1/auth/me")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "7. 로그아웃 후 me (401)" "GET" "$BASE_URL/api/auth/me" "" "401" "$HTTP_CODE" "$BODY"
+check "7. 로그아웃 후 me (401)" "GET" "$BASE_URL/api/v1/auth/me" "" "401" "$HTTP_CODE" "$BODY"
 
 echo "========================================"
 echo " 결과: ${PASS} passed, ${FAIL} failed (total $((PASS + FAIL)))"

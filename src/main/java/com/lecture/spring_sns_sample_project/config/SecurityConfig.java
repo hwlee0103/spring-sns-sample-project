@@ -68,10 +68,11 @@ public class SecurityConfig {
             csrf ->
                 csrf.csrfTokenRepository(csrfTokenRepository)
                     .csrfTokenRequestHandler(csrfRequestHandler)
-                    .ignoringRequestMatchers("/h2-console/**", "/api/auth/login")
+                    .ignoringRequestMatchers("/h2-console/**", "/api/v1/auth/login")
                     .ignoringRequestMatchers(
                         org.springframework.security.web.servlet.util.matcher
-                            .PathPatternRequestMatcher.pathPattern(HttpMethod.POST, "/api/user")))
+                            .PathPatternRequestMatcher.pathPattern(
+                            HttpMethod.POST, "/api/v1/user")))
         .addFilterAfter(csrfCookieFilter(), UsernamePasswordAuthenticationFilter.class)
         .addFilterBefore(
             rateLimitFilter(rateLimitProperties), UsernamePasswordAuthenticationFilter.class)
@@ -96,22 +97,22 @@ public class SecurityConfig {
                                 "세션이 만료되었습니다.")))
         .authorizeHttpRequests(
             auth ->
-                auth.requestMatchers(HttpMethod.POST, "/api/user")
+                auth.requestMatchers(HttpMethod.POST, "/api/v1/user")
                     .permitAll()
-                    .requestMatchers("/api/auth/login")
+                    .requestMatchers("/api/v1/auth/login")
                     .permitAll()
-                    .requestMatchers(HttpMethod.GET, "/api/post", "/api/post/*")
+                    .requestMatchers(HttpMethod.GET, "/api/v1/post", "/api/v1/post/*")
                     .permitAll()
                     .requestMatchers(
                         HttpMethod.GET,
-                        "/api/user",
-                        "/api/user/*",
-                        "/api/user/by-nickname/*",
-                        "/api/user/*/followers",
-                        "/api/user/*/followings",
-                        "/api/user/*/follow/count")
+                        "/api/v1/user",
+                        "/api/v1/user/*",
+                        "/api/v1/user/by-nickname/*",
+                        "/api/v1/user/*/followers",
+                        "/api/v1/user/*/followings",
+                        "/api/v1/user/*/follow/count")
                     .permitAll()
-                    .requestMatchers("/api/admin/**")
+                    .requestMatchers("/api/v1/admin/**")
                     .hasRole("ADMIN")
                     .requestMatchers("/h2-console/**")
                     .access(
@@ -126,7 +127,7 @@ public class SecurityConfig {
         .logout(
             logout ->
                 logout
-                    .logoutUrl("/api/auth/logout")
+                    .logoutUrl("/api/v1/auth/logout")
                     .logoutSuccessHandler((req, res, authentication) -> res.setStatus(204)));
 
     http.headers(

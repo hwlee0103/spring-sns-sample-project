@@ -16,9 +16,14 @@ Spring Boot SNS (Social Networking Service) sample project. Monorepo:
 
 ## Design Documents
 
-- **Backend design**: `docs/backend-design.md` — 패키지 구조, 도메인 모델, API 계약, 인증, 검증 전략
-- **Frontend design**: `docs/frontend-design.md` — 디렉토리, 데이터 흐름, rewrites 전략, Next.js 16 변경점
-- **Auth design**: `docs/auth-design.md` — Session-Primary / JWT-Auxiliary 설계, 위협 모델, 단계별 도입 로드맵
+```
+docs/
+├── backend/
+│   ├── sns-design.md      # 패키지 구조, 도메인 모델, API 계약, 인증, 검증 전략
+│   └── auth-design.md     # Session-Primary / JWT-Auxiliary 설계, 위협 모델
+└── frontend/
+    └── sns-design.md      # 디렉토리, 데이터 흐름, UI 시스템 디자인, Next.js 16
+```
 
 ## Build & Test Commands
 

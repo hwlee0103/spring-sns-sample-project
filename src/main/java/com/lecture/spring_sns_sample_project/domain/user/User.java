@@ -1,5 +1,6 @@
 package com.lecture.spring_sns_sample_project.domain.user;
 
+import com.lecture.spring_sns_sample_project.domain.common.BaseEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -14,11 +15,13 @@ import lombok.Getter;
  * 사용자 도메인 Entity.
  *
  * <p>비밀번호는 항상 인코딩된 값으로 생성/수정한다. 인코딩은 Service 레이어 책임이며, 이 클래스는 PasswordEncoder 등 보안 기술에 의존하지 않는다.
+ *
+ * <p>{@link BaseEntity} 로부터 {@code createdAt}, {@code updatedAt}, {@code deletedAt} 을 상속받는다.
  */
 @Entity
 @Table(name = "users")
 @Getter
-public class User {
+public class User extends BaseEntity {
 
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)

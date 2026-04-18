@@ -22,7 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>로그인은 {@code RestAuthenticationFilter} + {@code RestAuthSuccessHandler} / {@code
  * RestAuthFailureHandler} 가 처리한다. 이 컨트롤러는 로그인 후 세션 상태 조회 엔드포인트만 제공한다.
  *
- * <p>로그아웃은 Spring Security {@code logout()} DSL 이 {@code POST /api/auth/logout} 을 처리한다.
+ * <p>로그아웃은 Spring Security {@code logout()} DSL 이 {@code POST /api/v1/auth/logout} 을 처리한다.
  */
 @RestController
 @RequiredArgsConstructor
@@ -30,7 +30,7 @@ public class AuthController {
 
   private final UserService userService;
 
-  @GetMapping("/api/auth/me")
+  @GetMapping("/api/v1/auth/me")
   public ResponseEntity<UserResponse> me(
       @AuthenticationPrincipal AuthUser authUser, HttpServletRequest httpRequest) {
     if (authUser == null) {

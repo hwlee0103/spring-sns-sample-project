@@ -1,0 +1,59 @@
+-- SNS 테스트용 샘플 데이터
+-- 사용법: ./gradlew bootRun 후 H2 콘솔(http://localhost:8080/h2-console) 에서 실행
+-- 또는 spring.sql.init.data-locations=classpath:db/sample-data.sql 설정
+--
+-- 비밀번호는 모두 'password123' (Argon2 인코딩 값은 런타임에 생성해야 하므로,
+-- 이 파일은 bootRun 이 아닌 DataLoader 컴포넌트에서 UserService.register() 를 통해 로드)
+
+-- ========================================================
+-- 이 파일은 SQL 직접 실행이 아닌 DataLoader 의 입력 데이터 정의입니다.
+-- 실제 로드는 SampleDataLoader.java 가 수행합니다.
+-- ========================================================
+
+-- 사용자 10명
+-- | email                  | password    | nickname     |
+-- |------------------------|-------------|--------------|
+-- | alice@example.com      | password123 | alice        |
+-- | bob@example.com        | password123 | bob          |
+-- | carol@example.com      | password123 | carol        |
+-- | dave@example.com       | password123 | dave         |
+-- | eve@example.com        | password123 | eve          |
+-- | frank@example.com      | password123 | frank        |
+-- | grace@example.com      | password123 | grace        |
+-- | henry@example.com      | password123 | henry        |
+-- | iris@example.com       | password123 | iris         |
+-- | jack@example.com       | password123 | jack         |
+
+-- 게시글 (author → 내용)
+-- | author  | content                                      |
+-- |---------|----------------------------------------------|
+-- | alice   | 오늘 날씨가 정말 좋네요!                        |
+-- | alice   | 새로운 프로젝트를 시작했어요.                     |
+-- | bob     | 맛집 추천 받습니다!                              |
+-- | bob     | 주말에 등산 다녀왔어요.                           |
+-- | carol   | 독서 모임 멤버를 모집합니다.                       |
+-- | dave    | 커피 한 잔의 여유                                |
+-- | eve     | 오늘의 코딩 일기                                 |
+-- | frank   | 새 앨범 나왔는데 추천!                            |
+-- | grace   | 여행 계획 세우는 중                               |
+-- | henry   | 오늘 배운 것: Spring Security                    |
+
+-- 팔로우 관계
+-- | follower → following |
+-- |----------------------|
+-- | alice → bob          |
+-- | alice → carol        |
+-- | alice → dave         |
+-- | bob → alice          |  (맞팔)
+-- | bob → carol          |
+-- | carol → alice        |  (맞팔)
+-- | carol → bob          |  (맞팔)
+-- | dave → alice         |  (맞팔)
+-- | dave → eve           |
+-- | eve → alice          |
+-- | eve → frank          |
+-- | frank → grace        |
+-- | grace → henry        |
+-- | henry → iris         |
+-- | iris → jack          |
+-- | jack → alice         |

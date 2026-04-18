@@ -83,7 +83,7 @@ class AuthFlowIntegrationTest {
   }
 
   @Nested
-  @DisplayName("POST /api/auth/login")
+  @DisplayName("POST /api/v1/auth/login")
   class Login {
 
     @Test
@@ -91,7 +91,7 @@ class AuthFlowIntegrationTest {
     void 정상_로그인() throws Exception {
       mockMvc
           .perform(
-              post("/api/auth/login")
+              post("/api/v1/auth/login")
                   .contentType(MediaType.APPLICATION_JSON)
                   .content(loginBody(EMAIL, PASSWORD)))
           .andExpect(status().isOk())
@@ -108,7 +108,7 @@ class AuthFlowIntegrationTest {
     void 잘못된_비밀번호() throws Exception {
       mockMvc
           .perform(
-              post("/api/auth/login")
+              post("/api/v1/auth/login")
                   .contentType(MediaType.APPLICATION_JSON)
                   .content(loginBody(EMAIL, "wrong_password")))
           .andExpect(status().isUnauthorized());
@@ -119,7 +119,7 @@ class AuthFlowIntegrationTest {
     void 미존재_email() throws Exception {
       mockMvc
           .perform(
-              post("/api/auth/login")
+              post("/api/v1/auth/login")
                   .contentType(MediaType.APPLICATION_JSON)
                   .content(loginBody("ghost@example.com", PASSWORD)))
           .andExpect(status().isUnauthorized());
@@ -130,7 +130,7 @@ class AuthFlowIntegrationTest {
     void contentType_charset_포함() throws Exception {
       mockMvc
           .perform(
-              post("/api/auth/login")
+              post("/api/v1/auth/login")
                   .contentType(MediaType.parseMediaType("application/json;charset=UTF-8"))
                   .content(loginBody(EMAIL, PASSWORD)))
           .andExpect(status().isOk());
@@ -141,7 +141,9 @@ class AuthFlowIntegrationTest {
     void 잘못된_json() throws Exception {
       mockMvc
           .perform(
-              post("/api/auth/login").contentType(MediaType.APPLICATION_JSON).content("not-a-json"))
+              post("/api/v1/auth/login")
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("not-a-json"))
           .andExpect(status().isUnauthorized());
     }
 
@@ -152,7 +154,7 @@ class AuthFlowIntegrationTest {
       MvcResult result =
           mockMvc
               .perform(
-                  post("/api/auth/login")
+                  post("/api/v1/auth/login")
                       .contentType(MediaType.APPLICATION_JSON)
                       .content(loginBody(EMAIL, PASSWORD)))
               .andExpect(status().isOk())
@@ -166,13 +168,13 @@ class AuthFlowIntegrationTest {
   }
 
   @Nested
-  @DisplayName("GET /api/auth/me")
+  @DisplayName("GET /api/v1/auth/me")
   class Me {
 
     @Test
     @DisplayName("비인증 — 401")
     void 비인증() throws Exception {
-      mockMvc.perform(get("/api/auth/me")).andExpect(status().isUnauthorized());
+      mockMvc.perform(get("/api/v1/auth/me")).andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -181,7 +183,7 @@ class AuthFlowIntegrationTest {
       MockHttpSession session = loginAndGetSession();
 
       mockMvc
-          .perform(get("/api/auth/me").session(session))
+          .perform(get("/api/v1/auth/me").session(session))
           .andExpect(status().isOk())
           .andExpect(jsonPath("$.email").value(EMAIL))
           .andExpect(jsonPath("$.nickname").value(NICKNAME));
@@ -197,7 +199,7 @@ class AuthFlowIntegrationTest {
       followCountRepository.deleteAllInBatch();
       tokenVersionFilter.evict(testUser.getId());
 
-      mockMvc.perform(get("/api/auth/me").session(session)).andExpect(status().isUnauthorized());
+      mockMvc.perform(get("/api/v1/auth/me").session(session)).andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -206,7 +208,7 @@ class AuthFlowIntegrationTest {
       MockHttpSession session = loginAndGetSession();
 
       // 첫 호출은 200 (DB tokenVersion=0 == session tokenVersion=0)
-      mockMvc.perform(get("/api/auth/me").session(session)).andExpect(status().isOk());
+      mockMvc.perform(get("/api/v1/auth/me").session(session)).andExpect(status().isOk());
 
       // DB 의 tokenVersion 강제 증가 (비밀번호 변경을 시뮬레이션)
       User user = userRepository.findById(testUser.getId()).orElseThrow();
@@ -215,12 +217,12 @@ class AuthFlowIntegrationTest {
       // TokenVersionFilter Caffeine 캐시를 evict 하여 다음 요청에서 DB 재조회
       tokenVersionFilter.evict(testUser.getId());
 
-      mockMvc.perform(get("/api/auth/me").session(session)).andExpect(status().isUnauthorized());
+      mockMvc.perform(get("/api/v1/auth/me").session(session)).andExpect(status().isUnauthorized());
     }
   }
 
   @Nested
-  @DisplayName("POST /api/auth/logout")
+  @DisplayName("POST /api/v1/auth/logout")
   class Logout {
 
     @Test
@@ -229,7 +231,7 @@ class AuthFlowIntegrationTest {
       MockHttpSession session = loginAndGetSession();
 
       mockMvc
-          .perform(post("/api/auth/logout").session(session).with(csrf()))
+          .perform(post("/api/v1/auth/logout").session(session).with(csrf()))
           .andExpect(status().isNoContent());
     }
 
@@ -239,11 +241,11 @@ class AuthFlowIntegrationTest {
       MockHttpSession session = loginAndGetSession();
 
       mockMvc
-          .perform(post("/api/auth/logout").session(session).with(csrf()))
+          .perform(post("/api/v1/auth/logout").session(session).with(csrf()))
           .andExpect(status().isNoContent());
 
       // 로그아웃으로 세션 무효화됨 — 동일 세션으로 me 호출 시 401
-      mockMvc.perform(get("/api/auth/me").session(session)).andExpect(status().isUnauthorized());
+      mockMvc.perform(get("/api/v1/auth/me").session(session)).andExpect(status().isUnauthorized());
     }
   }
 
@@ -252,7 +254,7 @@ class AuthFlowIntegrationTest {
     MvcResult result =
         mockMvc
             .perform(
-                post("/api/auth/login")
+                post("/api/v1/auth/login")
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(loginBody(EMAIL, PASSWORD)))
             .andExpect(status().isOk())

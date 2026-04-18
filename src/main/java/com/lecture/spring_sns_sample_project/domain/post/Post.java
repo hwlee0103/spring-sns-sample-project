@@ -1,5 +1,6 @@
 package com.lecture.spring_sns_sample_project.domain.post;
 
+import com.lecture.spring_sns_sample_project.domain.common.BaseEntity;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import jakarta.persistence.Column;
 import jakarta.persistence.ConstraintMode;
@@ -13,15 +14,20 @@ import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
-import java.time.Instant;
 import lombok.Getter;
 
+/**
+ * 게시글 도메인 Entity.
+ *
+ * <p>{@link BaseEntity} 로부터 {@code createdAt}, {@code updatedAt}, {@code deletedAt} 을 상속받는다. 기존
+ * {@code createdAt} 수동 설정을 제거하고 {@code @PrePersist} 콜백에 위임한다.
+ */
 @Entity
 @Table(
     name = "posts",
     indexes = {@Index(name = "idx_posts_author_id", columnList = "author_id")})
 @Getter
-public class Post {
+public class Post extends BaseEntity {
 
   public static final int MAX_CONTENT_LENGTH = 500;
 
@@ -39,9 +45,6 @@ public class Post {
   @Column(nullable = false, length = MAX_CONTENT_LENGTH)
   private String content;
 
-  @Column(nullable = false, updatable = false)
-  private Instant createdAt;
-
   protected Post() {}
 
   public Post(User author, String content) {
@@ -56,7 +59,6 @@ public class Post {
     }
     this.author = author;
     this.content = content;
-    this.createdAt = Instant.now();
   }
 
   public void updateContent(String content) {

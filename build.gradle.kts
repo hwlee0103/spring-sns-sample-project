@@ -30,6 +30,8 @@ dependencies {
     implementation("com.bucket4j:bucket4j_jdk17-core:8.14.0")
     implementation("com.github.ben-manes.caffeine:caffeine")
     implementation("org.springframework.retry:spring-retry:2.0.12")
+    implementation("org.flywaydb:flyway-core")
+    implementation("org.flywaydb:flyway-database-postgresql")
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")
     runtimeOnly("com.h2database:h2")

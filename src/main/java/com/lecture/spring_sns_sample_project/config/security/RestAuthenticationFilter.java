@@ -26,7 +26,7 @@ public class RestAuthenticationFilter extends AbstractAuthenticationProcessingFi
   private final ObjectMapper objectMapper;
 
   public RestAuthenticationFilter(ObjectMapper objectMapper) {
-    super(PathPatternRequestMatcher.pathPattern(HttpMethod.POST, "/api/auth/login"));
+    super(PathPatternRequestMatcher.pathPattern(HttpMethod.POST, "/api/v1/auth/login"));
     this.objectMapper = objectMapper;
   }
 
