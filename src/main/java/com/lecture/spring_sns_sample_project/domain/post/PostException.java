@@ -29,4 +29,29 @@ public class PostException extends DomainException {
   public static PostException forbidden(Long id) {
     return new PostException(ErrorType.FORBIDDEN, "게시글에 대한 권한이 없습니다.");
   }
+
+  public static PostException editWindowExpired() {
+    return new PostException(
+        ErrorType.BAD_REQUEST, "게시글 수정은 작성 후 " + Post.EDIT_WINDOW_MINUTES + "분 이내에만 가능합니다.");
+  }
+
+  public static PostException replyToDeletedPost() {
+    return new PostException(ErrorType.BAD_REQUEST, "삭제된 게시글에는 답글을 작성할 수 없습니다.");
+  }
+
+  public static PostException repostDeletedPost() {
+    return new PostException(ErrorType.BAD_REQUEST, "삭제된 게시글은 리포스트할 수 없습니다.");
+  }
+
+  public static PostException repostOfRepost() {
+    return new PostException(ErrorType.BAD_REQUEST, "리포스트는 원본 게시글만 가능합니다.");
+  }
+
+  public static PostException duplicateRepost() {
+    return new PostException(ErrorType.CONFLICT, "이미 리포스트한 게시글입니다.");
+  }
+
+  public static PostException duplicateQuote() {
+    return new PostException(ErrorType.CONFLICT, "이미 인용한 게시글입니다.");
+  }
 }
