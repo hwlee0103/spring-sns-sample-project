@@ -76,13 +76,18 @@ public class PostService {
     return post;
   }
 
-  /** 단건 조회. 삭제된 게시글도 반환 (스레드 표시용). 조회수는 Redis Dirty Set 패턴으로 기록. */
+  /** 단건 조회 (공개 API 용). 삭제된 게시글도 반환 (스레드 표시). 조회수는 Redis Dirty Set 패턴으로 기록. */
   public Post getById(Long id) {
-    Post post = postRepository.findWithAuthorById(id).orElseThrow(() -> PostException.notFound(id));
+    Post post = findById(id);
     if (!post.isDeleted()) {
       viewCountRecorder.increment(id);
     }
     return post;
+  }
+
+  /** 내부 조회 — 조회수를 올리지 않는다. update/delete/검증 용도. */
+  private Post findById(Long id) {
+    return postRepository.findWithAuthorById(id).orElseThrow(() -> PostException.notFound(id));
   }
 
   /** 전체 피드 — 삭제되지 않은 게시글만. */
@@ -118,7 +123,7 @@ public class PostService {
     if (content == null || content.isBlank()) {
       throw PostException.invalidField("content");
     }
-    Post post = getById(id);
+    Post post = findById(id);
     if (!post.isAuthor(requesterId)) {
       throw PostException.forbidden(id);
     }
@@ -136,7 +141,7 @@ public class PostService {
     if (requesterId == null) {
       throw PostException.invalidField("requesterId");
     }
-    Post post = getById(id);
+    Post post = findById(id);
     if (!post.isAuthor(requesterId)) {
       throw PostException.forbidden(id);
     }
@@ -166,7 +171,8 @@ public class PostService {
   }
 
   private void validateQuoteTarget(Long quoteId, Long authorId) {
-    if (!postRepository.existsById(quoteId)) {
+    Post target = findById(quoteId);
+    if (target.isDeleted()) {
       throw PostException.notFound(quoteId);
     }
     if (postRepository.existsByQuoteIdAndAuthorId(quoteId, authorId)) {
