@@ -322,7 +322,7 @@ class UserServiceTest {
     }
 
     @Test
-    @DisplayName("현재 비번 오류 → invalidCredentials(BAD_REQUEST)")
+    @DisplayName("현재 비번 오류 → invalidCredentials(UNAUTHORIZED)")
     void 현재비번_오류() {
       User user = userService.register("a@b.com", "old_password", "nick");
 

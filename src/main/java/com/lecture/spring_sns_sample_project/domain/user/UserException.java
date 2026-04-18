@@ -39,7 +39,7 @@ public class UserException extends DomainException {
   }
 
   public static UserException invalidCredentials() {
-    return new UserException(ErrorType.BAD_REQUEST, "현재 비밀번호가 올바르지 않습니다.");
+    return new UserException(ErrorType.UNAUTHORIZED, "현재 비밀번호가 올바르지 않습니다.");
   }
 
   public static UserException samePassword() {
