@@ -92,6 +92,11 @@ public interface PostRepository extends JpaRepository<Post, Long> {
   @Query("UPDATE Post p SET p.viewCount = p.viewCount + 1 WHERE p.id = :postId")
   int incrementViewCount(@Param("postId") Long postId);
 
+  /** 조회수 배치 증가 — ViewCountSyncScheduler 에서 delta 만큼 한 번에 증가. */
+  @Modifying
+  @Query("UPDATE Post p SET p.viewCount = p.viewCount + :delta WHERE p.id = :postId")
+  int incrementViewCountBy(@Param("postId") Long postId, @Param("delta") long delta);
+
   @Modifying
   @Query("UPDATE Post p SET p.shareCount = p.shareCount + 1 WHERE p.id = :postId")
   int incrementShareCount(@Param("postId") Long postId);

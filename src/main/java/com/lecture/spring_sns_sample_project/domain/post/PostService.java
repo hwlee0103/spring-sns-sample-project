@@ -20,6 +20,7 @@ public class PostService {
 
   private final PostRepository postRepository;
   private final UserRepository userRepository;
+  private final ViewCountRecorder viewCountRecorder;
 
   /**
    * 게시글 생성 — 유형별 분기.
@@ -75,9 +76,13 @@ public class PostService {
     return post;
   }
 
-  /** 단건 조회. 삭제된 게시글도 반환 (스레드 표시용). */
+  /** 단건 조회. 삭제된 게시글도 반환 (스레드 표시용). 조회수는 Redis Dirty Set 패턴으로 기록. */
   public Post getById(Long id) {
-    return postRepository.findWithAuthorById(id).orElseThrow(() -> PostException.notFound(id));
+    Post post = postRepository.findWithAuthorById(id).orElseThrow(() -> PostException.notFound(id));
+    if (!post.isDeleted()) {
+      viewCountRecorder.increment(id);
+    }
+    return post;
   }
 
   /** 전체 피드 — 삭제되지 않은 게시글만. */
