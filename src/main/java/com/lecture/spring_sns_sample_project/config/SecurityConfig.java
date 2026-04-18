@@ -101,7 +101,12 @@ public class SecurityConfig {
                     .permitAll()
                     .requestMatchers("/api/v1/auth/login")
                     .permitAll()
-                    .requestMatchers(HttpMethod.GET, "/api/v1/post", "/api/v1/post/*")
+                    .requestMatchers(
+                        HttpMethod.GET,
+                        "/api/v1/post",
+                        "/api/v1/post/*",
+                        "/api/v1/post/*/replies",
+                        "/api/v1/post/*/quotes")
                     .permitAll()
                     .requestMatchers(
                         HttpMethod.GET,
@@ -110,7 +115,8 @@ public class SecurityConfig {
                         "/api/v1/user/by-nickname/*",
                         "/api/v1/user/*/followers",
                         "/api/v1/user/*/followings",
-                        "/api/v1/user/*/follow/count")
+                        "/api/v1/user/*/follow/count",
+                        "/api/v1/user/*/posts")
                     .permitAll()
                     .requestMatchers("/api/v1/admin/**")
                     .hasRole("ADMIN")
