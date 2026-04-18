@@ -56,79 +56,79 @@ NICKNAME="post테스트_$(date +%s)"
 
 # 1. 회원가입
 REQ_BODY=$(printf '{"email":"%s","password":"%s","nickname":"%s"}' "$EMAIL" "$PASSWORD" "$NICKNAME")
-RESPONSE=$(curl -s -w "\n%{http_code}" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/user" \
+RESPONSE=$(curl -s -w "\n%{http_code}" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/v1/user" \
   -H "Content-Type: application/json" \
   -d "$REQ_BODY")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "1. 회원가입" "POST" "$BASE_URL/api/user" "$REQ_BODY" "201" "$HTTP_CODE" "$BODY"
+check "1. 회원가입" "POST" "$BASE_URL/api/v1/user" "$REQ_BODY" "201" "$HTTP_CODE" "$BODY"
 
 # 2. 로그인
 REQ_BODY=$(printf '{"email":"%s","password":"%s"}' "$EMAIL" "$PASSWORD")
-RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/auth/login" \
+RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/v1/auth/login" \
   -H "Content-Type: application/json" \
   -d "$REQ_BODY")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "2. 로그인" "POST" "$BASE_URL/api/auth/login" "$REQ_BODY" "200" "$HTTP_CODE" "$BODY"
+check "2. 로그인" "POST" "$BASE_URL/api/v1/auth/login" "$REQ_BODY" "200" "$HTTP_CODE" "$BODY"
 
 # 3. 비인증 게시글 생성 시도 → 401 (별도 세션)
 REQ_BODY='{"content":"비인증 게시글"}'
-RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/post" \
+RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$BASE_URL/api/v1/post" \
   -H "Content-Type: application/json" \
   -d "$REQ_BODY")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "3. 비인증 게시글 생성 (401)" "POST" "$BASE_URL/api/post" "$REQ_BODY" "401" "$HTTP_CODE" "$BODY"
+check "3. 비인증 게시글 생성 (401)" "POST" "$BASE_URL/api/v1/post" "$REQ_BODY" "401" "$HTTP_CODE" "$BODY"
 
 # 4. 인증 게시글 생성
 CSRF=$(get_csrf)
 REQ_BODY='{"content":"첫 번째 게시글입니다."}'
-RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/post" \
+RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$BASE_URL/api/v1/post" \
   -H "Content-Type: application/json" \
   -H "X-XSRF-TOKEN: $CSRF" \
   -d "$REQ_BODY")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "4. 게시글 생성" "POST" "$BASE_URL/api/post" "$REQ_BODY" "201" "$HTTP_CODE" "$BODY"
+check "4. 게시글 생성" "POST" "$BASE_URL/api/v1/post" "$REQ_BODY" "201" "$HTTP_CODE" "$BODY"
 POST_ID=$(echo "$BODY" | jq -r '.id // empty')
 
 # 5. 게시글 단건 조회 (permitAll)
-RESPONSE=$(curl -s -w "\n%{http_code}" -X GET "$BASE_URL/api/post/$POST_ID")
+RESPONSE=$(curl -s -w "\n%{http_code}" -X GET "$BASE_URL/api/v1/post/$POST_ID")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "5. 게시글 단건 조회 (id=$POST_ID)" "GET" "$BASE_URL/api/post/$POST_ID" "" "200" "$HTTP_CODE" "$BODY"
+check "5. 게시글 단건 조회 (id=$POST_ID)" "GET" "$BASE_URL/api/v1/post/$POST_ID" "" "200" "$HTTP_CODE" "$BODY"
 
 # 6. 피드 조회 (permitAll)
-RESPONSE=$(curl -s -w "\n%{http_code}" -X GET "$BASE_URL/api/post?page=0&size=5")
+RESPONSE=$(curl -s -w "\n%{http_code}" -X GET "$BASE_URL/api/v1/post?page=0&size=5")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "6. 피드 조회 (page=0,size=5)" "GET" "$BASE_URL/api/post?page=0&size=5" "" "200" "$HTTP_CODE" "$BODY"
+check "6. 피드 조회 (page=0,size=5)" "GET" "$BASE_URL/api/v1/post?page=0&size=5" "" "200" "$HTTP_CODE" "$BODY"
 
 # 7. 게시글 수정
 CSRF=$(get_csrf)
 REQ_BODY='{"content":"수정된 게시글입니다."}'
-RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X PUT "$BASE_URL/api/post/$POST_ID" \
+RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X PUT "$BASE_URL/api/v1/post/$POST_ID" \
   -H "Content-Type: application/json" \
   -H "X-XSRF-TOKEN: $CSRF" \
   -d "$REQ_BODY")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "7. 게시글 수정 (id=$POST_ID)" "PUT" "$BASE_URL/api/post/$POST_ID" "$REQ_BODY" "200" "$HTTP_CODE" "$BODY"
+check "7. 게시글 수정 (id=$POST_ID)" "PUT" "$BASE_URL/api/v1/post/$POST_ID" "$REQ_BODY" "200" "$HTTP_CODE" "$BODY"
 
 # 8. 게시글 삭제
 CSRF=$(get_csrf)
-RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X DELETE "$BASE_URL/api/post/$POST_ID" \
+RESPONSE=$(curl -s -w "\n%{http_code}" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X DELETE "$BASE_URL/api/v1/post/$POST_ID" \
   -H "X-XSRF-TOKEN: $CSRF")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "8. 게시글 삭제 (id=$POST_ID)" "DELETE" "$BASE_URL/api/post/$POST_ID" "" "204" "$HTTP_CODE" "$BODY"
+check "8. 게시글 삭제 (id=$POST_ID)" "DELETE" "$BASE_URL/api/v1/post/$POST_ID" "" "204" "$HTTP_CODE" "$BODY"
 
 # 9. 삭제 확인 → 400 (또는 404)
-RESPONSE=$(curl -s -w "\n%{http_code}" -X GET "$BASE_URL/api/post/$POST_ID")
+RESPONSE=$(curl -s -w "\n%{http_code}" -X GET "$BASE_URL/api/v1/post/$POST_ID")
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
-check "9. 삭제 확인 조회 (id=$POST_ID → 404)" "GET" "$BASE_URL/api/post/$POST_ID" "" "404" "$HTTP_CODE" "$BODY"
+check "9. 삭제 확인 조회 (id=$POST_ID → 404)" "GET" "$BASE_URL/api/v1/post/$POST_ID" "" "404" "$HTTP_CODE" "$BODY"
 
 echo "========================================"
 echo " 결과: ${PASS} passed, ${FAIL} failed (total $((PASS + FAIL)))"

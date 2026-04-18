@@ -44,26 +44,26 @@ public class UserController {
   private final SessionCleanupService sessionCleanupService;
   private final TokenVersionFilter tokenVersionFilter;
 
-  @PostMapping("/api/user")
+  @PostMapping("/api/v1/user")
   public ResponseEntity<UserResponse> register(@Valid @RequestBody UserCreateRequest request) {
     User user = userService.register(request.email(), request.password(), request.nickname());
     UserResponse response = UserResponse.from(user);
-    return ResponseEntity.created(URI.create("/api/user/" + user.getId())).body(response);
+    return ResponseEntity.created(URI.create("/api/v1/user/" + user.getId())).body(response);
   }
 
-  @GetMapping("/api/user/{id}")
+  @GetMapping("/api/v1/user/{id}")
   public ResponseEntity<UserSummaryResponse> getUser(@PathVariable Long id) {
     User user = userService.getById(id);
     return ResponseEntity.ok(UserSummaryResponse.from(user));
   }
 
-  @GetMapping("/api/user/by-nickname/{nickname}")
+  @GetMapping("/api/v1/user/by-nickname/{nickname}")
   public ResponseEntity<UserSummaryResponse> getUserByNickname(@PathVariable String nickname) {
     User user = userService.getByNickname(nickname);
     return ResponseEntity.ok(UserSummaryResponse.from(user));
   }
 
-  @GetMapping("/api/user")
+  @GetMapping("/api/v1/user")
   public ResponseEntity<PageResponse<UserSummaryResponse>> getUsers(
       @PageableDefault(size = 20, sort = "id", direction = Sort.Direction.DESC) Pageable pageable) {
     PageResponse<UserSummaryResponse> response =
@@ -71,7 +71,7 @@ public class UserController {
     return ResponseEntity.ok(response);
   }
 
-  @PutMapping("/api/user/{id}")
+  @PutMapping("/api/v1/user/{id}")
   public ResponseEntity<UserResponse> updateUser(
       @PathVariable Long id,
       @Valid @RequestBody UserUpdateRequest request,
@@ -81,7 +81,7 @@ public class UserController {
     return ResponseEntity.ok(UserResponse.from(user));
   }
 
-  @PutMapping("/api/user/{id}/password")
+  @PutMapping("/api/v1/user/{id}/password")
   public ResponseEntity<Void> changePassword(
       @PathVariable Long id,
       @Valid @RequestBody ChangePasswordRequest request,
@@ -105,7 +105,7 @@ public class UserController {
     return ResponseEntity.noContent().build();
   }
 
-  @DeleteMapping("/api/user/{id}")
+  @DeleteMapping("/api/v1/user/{id}")
   public ResponseEntity<Void> deleteUser(
       @PathVariable Long id,
       @AuthenticationPrincipal AuthUser authUser,

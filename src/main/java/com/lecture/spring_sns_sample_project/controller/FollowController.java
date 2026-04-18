@@ -28,16 +28,16 @@ public class FollowController {
 
   private final FollowService followService;
 
-  @PostMapping("/api/user/{id}/follow")
+  @PostMapping("/api/v1/user/{id}/follow")
   public ResponseEntity<FollowResponse> follow(
       @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
     requireAuth(authUser);
     Follow follow = followService.follow(authUser.getId(), id);
-    return ResponseEntity.created(URI.create("/api/user/" + id + "/follow"))
+    return ResponseEntity.created(URI.create("/api/v1/user/" + id + "/follow"))
         .body(FollowResponse.from(follow));
   }
 
-  @DeleteMapping("/api/user/{id}/follow")
+  @DeleteMapping("/api/v1/user/{id}/follow")
   public ResponseEntity<Void> unfollow(
       @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
     requireAuth(authUser);
@@ -45,7 +45,7 @@ public class FollowController {
     return ResponseEntity.noContent().build();
   }
 
-  @GetMapping("/api/user/{id}/followers")
+  @GetMapping("/api/v1/user/{id}/followers")
   public ResponseEntity<PageResponse<FollowUserResponse>> getFollowers(
       @PathVariable Long id,
       @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC)
@@ -55,7 +55,7 @@ public class FollowController {
             followService.getFollowers(id, pageable), FollowUserResponse::fromFollower));
   }
 
-  @GetMapping("/api/user/{id}/followings")
+  @GetMapping("/api/v1/user/{id}/followings")
   public ResponseEntity<PageResponse<FollowUserResponse>> getFollowings(
       @PathVariable Long id,
       @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC)
@@ -65,14 +65,14 @@ public class FollowController {
             followService.getFollowings(id, pageable), FollowUserResponse::fromFollowing));
   }
 
-  @GetMapping("/api/user/{id}/follow/count")
+  @GetMapping("/api/v1/user/{id}/follow/count")
   public ResponseEntity<FollowCountResponse> getFollowCount(@PathVariable Long id) {
     FollowService.FollowCountResult count = followService.getFollowCount(id);
     return ResponseEntity.ok(
         new FollowCountResponse(count.followersCount(), count.followeesCount()));
   }
 
-  @GetMapping("/api/user/{id}/follow/status")
+  @GetMapping("/api/v1/user/{id}/follow/status")
   public ResponseEntity<FollowStatusResponse> getFollowStatus(
       @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
     requireAuth(authUser);

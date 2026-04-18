@@ -29,21 +29,21 @@ public class PostController {
 
   private final PostService postService;
 
-  @PostMapping("/api/post")
+  @PostMapping("/api/v1/post")
   public ResponseEntity<PostResponse> create(
       @Valid @RequestBody PostCreateRequest request, @AuthenticationPrincipal AuthUser authUser) {
     requireAuth(authUser);
     Post post = postService.create(authUser.getId(), request.content());
-    return ResponseEntity.created(URI.create("/api/post/" + post.getId()))
+    return ResponseEntity.created(URI.create("/api/v1/post/" + post.getId()))
         .body(PostResponse.from(post));
   }
 
-  @GetMapping("/api/post/{id}")
+  @GetMapping("/api/v1/post/{id}")
   public ResponseEntity<PostResponse> getPost(@PathVariable Long id) {
     return ResponseEntity.ok(PostResponse.from(postService.getById(id)));
   }
 
-  @GetMapping("/api/post")
+  @GetMapping("/api/v1/post")
   public ResponseEntity<PageResponse<PostResponse>> getFeed(
       @PageableDefault(size = 20, sort = "id", direction = Sort.Direction.DESC) Pageable pageable) {
     PageResponse<PostResponse> response =
@@ -51,7 +51,7 @@ public class PostController {
     return ResponseEntity.ok(response);
   }
 
-  @PutMapping("/api/post/{id}")
+  @PutMapping("/api/v1/post/{id}")
   public ResponseEntity<PostResponse> update(
       @PathVariable Long id,
       @Valid @RequestBody PostUpdateRequest request,
@@ -61,7 +61,7 @@ public class PostController {
     return ResponseEntity.ok(PostResponse.from(post));
   }
 
-  @DeleteMapping("/api/post/{id}")
+  @DeleteMapping("/api/v1/post/{id}")
   public ResponseEntity<Void> delete(
       @PathVariable Long id, @AuthenticationPrincipal AuthUser authUser) {
     requireAuth(authUser);
