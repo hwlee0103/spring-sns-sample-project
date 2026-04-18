@@ -6,12 +6,12 @@ import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserException;
 import com.lecture.spring_sns_sample_project.domain.user.UserService;
 import com.lecture.spring_sns_sample_project.domain.user.security.AuthUser;
+import com.lecture.spring_sns_sample_project.domain.user.security.CurrentUser;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -32,7 +32,7 @@ public class AuthController {
 
   @GetMapping("/api/v1/auth/me")
   public ResponseEntity<UserResponse> me(
-      @AuthenticationPrincipal AuthUser authUser, HttpServletRequest httpRequest) {
+      @CurrentUser AuthUser authUser, HttpServletRequest httpRequest) {
     if (authUser == null) {
       return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
     }

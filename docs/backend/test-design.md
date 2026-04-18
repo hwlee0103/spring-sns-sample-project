@@ -313,7 +313,51 @@ class AuthFlowIntegrationTest {
 | `post.sh` | 9 | CRUD + 비인증 방어 |
 | `follow.sh` | 15 | 팔로우/중복/셀프/카운트/재팔로우 |
 
-### 5.3 미커버 영역
+### 5.3 Post/Like/ViewCount 테스트 시나리오 (설계 — 향후 구현)
+
+#### PostServiceTest
+
+| @Nested 그룹 | 시나리오 |
+|---|---|
+| `Create — ORIGINAL` | 일반 게시글 생성 + 카운트 초기값 0 / content null → invalidField / content blank / content 1000자 초과 → contentTooLong / authorId null / author 미존재 |
+| `Create — REPLY` | 답글 생성 + 부모 replyCount++ / 부모 미존재 → notFound / 부모 삭제됨 → replyToDeletedPost / parentId null 이면 ORIGINAL 생성 |
+| `Create — QUOTE` | 인용 생성 + 원본 repostCount++ / 인용 대상 미존재 / 중복 인용 → duplicateQuote(409) / 삭제된 원본 인용 허용 |
+| `Create — REPOST` | 리포스트 생성(content=null) + 원본 repostCount++ / 원본 미존재 / 원본 삭제됨 → repostDeletedPost / 리포스트의 리포스트 → repostOfRepost / 중복 리포스트 → duplicateRepost(409) |
+| `Create — REPLY+QUOTE` | 답글+인용 동시 → 부모 replyCount++ + 원본 repostCount++ |
+| `Update` | 20분 내 수정 성공 / 20분 초과 → editWindowExpired / 리포스트 수정 불가 / 타인 게시글 수정 → forbidden / 삭제된 게시글 수정 불가 |
+| `Delete` | soft delete(content=null, deletedAt 설정) / 답글 삭제 → 부모 replyCount-- / 리포스트 삭제 → 원본 repostCount-- / 인용 삭제 → 원본 repostCount-- / 타인 게시글 삭제 → forbidden |
+| `GetById` | 정상 조회 / 미존재 → notFound / 삭제된 게시글도 반환 (스레드 표시) |
+| `GetReplies` | 답글 목록 페이징 / 삭제된 답글 제외 / 빈 목록 |
+| `GetQuotes` | 인용 목록 페이징 |
+| `GetUserPosts` | 사용자 게시글 목록 / 삭제 제외 |
+
+#### PostLikeServiceTest
+
+| @Nested 그룹 | 시나리오 |
+|---|---|
+| `Like` | 좋아요 성공 + Post.likeCount++ / 게시글 미존재 → notFound / 중복 좋아요 → duplicateLike(409) / 취소 후 재좋아요 → restore(기존 행 복원) / DataIntegrityViolation race → 409 |
+| `Unlike` | 좋아요 취소 + Post.likeCount-- / 좋아요 없음 → notLiked(400) / userId null / postId null |
+| `IsLiked` | 활성 좋아요 true / 취소됨 false / 미존재 false |
+| `GetLikes` | 게시글별 좋아요 목록 페이징 / 취소된 항목 제외 |
+| `GetLikedPostIds` | 일괄 조회 (IN) → N+1 방지 / 빈 목록 → empty set / null → empty set |
+
+#### ViewCountRecorderTest (단위 테스트 — Redis mock)
+
+| 시나리오 | 검증 |
+|---------|------|
+| increment 호출 시 Redis INCR + SADD 실행 | Pipeline 으로 2명령 1RTT 확인 |
+| Redis 장애 시 예외 무시 (서비스 영향 없음) | try-catch 확인, 예외 전파 안 됨 |
+
+#### ViewCountSyncSchedulerTest (통합 — Embedded Redis 또는 Mock)
+
+| 시나리오 | 검증 |
+|---------|------|
+| dirty set 에 postId 존재 → DB viewCount 증가 | Lua GETDEL+SREM → incrementViewCountBy 호출 |
+| dirty set 비어있음 → 아무 작업 없음 | DB UPDATE 호출 0회 |
+| delta = 0 → 스킵 | DB UPDATE 호출 안 됨 |
+| 동기화 후 dirty set 에서 제거됨 | SREM 확인 |
+
+### 5.4 미커버 영역
 
 | 영역 | 이유 | 향후 계획 |
 |------|------|-----------|

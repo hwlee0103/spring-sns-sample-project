@@ -10,6 +10,7 @@ import com.lecture.spring_sns_sample_project.controller.dto.UserUpdateRequest;
 import com.lecture.spring_sns_sample_project.domain.user.User;
 import com.lecture.spring_sns_sample_project.domain.user.UserService;
 import com.lecture.spring_sns_sample_project.domain.user.security.AuthUser;
+import com.lecture.spring_sns_sample_project.domain.user.security.CurrentUser;
 import com.lecture.spring_sns_sample_project.domain.user.security.SessionCleanupService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -23,7 +24,6 @@ import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.context.SecurityContextRepository;
@@ -75,7 +75,7 @@ public class UserController {
   public ResponseEntity<UserResponse> updateUser(
       @PathVariable Long id,
       @Valid @RequestBody UserUpdateRequest request,
-      @AuthenticationPrincipal AuthUser authUser) {
+      @CurrentUser AuthUser authUser) {
     requireOwnership(authUser, id);
     User user = userService.update(id, request.nickname());
     return ResponseEntity.ok(UserResponse.from(user));
@@ -85,7 +85,7 @@ public class UserController {
   public ResponseEntity<Void> changePassword(
       @PathVariable Long id,
       @Valid @RequestBody ChangePasswordRequest request,
-      @AuthenticationPrincipal AuthUser authUser,
+      @CurrentUser AuthUser authUser,
       HttpServletRequest httpRequest,
       HttpServletResponse httpResponse) {
     requireOwnership(authUser, id);
@@ -107,9 +107,7 @@ public class UserController {
 
   @DeleteMapping("/api/v1/user/{id}")
   public ResponseEntity<Void> deleteUser(
-      @PathVariable Long id,
-      @AuthenticationPrincipal AuthUser authUser,
-      HttpServletRequest httpRequest) {
+      @PathVariable Long id, @CurrentUser AuthUser authUser, HttpServletRequest httpRequest) {
     requireOwnership(authUser, id);
     userService.delete(id);
 
